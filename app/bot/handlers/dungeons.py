@@ -35,6 +35,9 @@ async def run_start(cq: CallbackQuery) -> None:
     if u.get("rest"):
         await cq.answer("Герой отдыхает. Сначала разбудите его.", show_alert=True)
         return
+    if u.get("fishing"):
+        await cq.answer("Герой на рыбалке. Сначала верните его.", show_alert=True)
+        return
     max_open_act = (
         4
         if bool(u.get("fourth_act_unlocked"))
@@ -53,7 +56,7 @@ async def run_start(cq: CallbackQuery) -> None:
         await cq.message.edit_text(
             f"🚶 Герой отправился в <b>{d.title}</b>.\n"
             "Я буду присылать новости о столкновениях и решениях по ходу похода.",
-            reply_markup=kb_main(expedition, None),
+            reply_markup=kb_main(expedition, None, None),
         )
         await cq.message.answer(
             f"🚶 <b>{d.title}</b>\n{expedition_travel_flavor(d.id)}",

@@ -51,17 +51,18 @@ def status_text(u: dict) -> str:
     rest = u.get("rest")
     if rest:
         end = float(rest["end_ts"])
-        end_label = time.strftime("%d.%m %H:%M UTC", time.gmtime(int(end)))
-        rem = max(0.0, end - time.time())
-        if rem <= 60:
-            left_txt = "скоро полное восстановление"
-        elif rem < 3600:
-            left_txt = f"осталось ≈ {int(rem // 60)} мин"
-        else:
-            left_txt = f"осталось ≈ {rem / 3600:.1f} ч"
+        end_label = time.strftime("%d.%m %H:%M", time.localtime(int(end)))
         base += (
-            f"\n😴 <b>Отдых:</b> герой спит до {end_label} ({left_txt}). "
+            f"\n😴 <b>Отдых:</b> герой спит до {end_label}. "
             "Полное HP после полного сна; досрочное пробуждение без лечения.\n"
+        )
+    fishing = u.get("fishing")
+    if fishing:
+        end = float(fishing["end_ts"])
+        end_label = time.strftime("%d.%m %H:%M", time.localtime(int(end)))
+        base += (
+            f"\n🎣 <b>Рыбалка:</b> герой на реке до {end_label}. "
+            "После возвращения получит рыбу в инвентарь.\n"
         )
     exp = u.get("expedition")
     if not exp:

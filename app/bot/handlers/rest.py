@@ -20,6 +20,9 @@ async def rest_start(cq: CallbackQuery) -> None:
     if u.get("expedition"):
         await cq.answer("Во время экспедиции отдых недоступен.", show_alert=True)
         return
+    if u.get("fishing"):
+        await cq.answer("Во время рыбалки отдых недоступен.", show_alert=True)
+        return
     if u.get("rest"):
         await cq.answer("Герой уже отдыхает.", show_alert=True)
         return
@@ -32,7 +35,7 @@ async def rest_start(cq: CallbackQuery) -> None:
     if cq.message and nu:
         await cq.message.edit_text(
             status_text(nu),
-            reply_markup=kb_main(nu.get("expedition"), nu.get("rest")),
+            reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
         )
     await cq.answer("Герой лёг отдыхать.")
 
@@ -55,6 +58,6 @@ async def rest_wake(cq: CallbackQuery) -> None:
         await cq.bot.send_message(
             nu["user_id"],
             status_text(nu),
-            reply_markup=kb_main(nu.get("expedition"), nu.get("rest")),
+            reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
         )
     await cq.answer()

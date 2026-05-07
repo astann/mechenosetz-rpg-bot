@@ -59,6 +59,8 @@ async def init_db() -> None:
             )
         if "rest_json" not in cols:
             await db.execute("ALTER TABLE users ADD COLUMN rest_json TEXT")
+        if "fishing_json" not in cols:
+            await db.execute("ALTER TABLE users ADD COLUMN fishing_json TEXT")
         if "next_act_unlocked" not in cols:
             await db.execute(
                 "ALTER TABLE users ADD COLUMN next_act_unlocked INTEGER NOT NULL DEFAULT 0"
@@ -146,6 +148,18 @@ def _parse_rest(raw: str | None) -> dict[str, Any] | None:
     return {"end_ts": float(end_ts)}
 
 
+def _parse_fishing(raw: str | None) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("fishing_json must be a JSON object")
+    end_ts = data.get("end_ts")
+    if end_ts is None:
+        raise ValueError("fishing_json must contain end_ts")
+    return {"end_ts": float(end_ts)}
+
+
 def _parse_json_dict(raw: str | None) -> dict[str, Any]:
     if not raw:
         return {}
@@ -172,6 +186,9 @@ async def get_user(user_id: int) -> dict[str, Any] | None:
         rj = u.get("rest_json")
         u["rest"] = _parse_rest(rj) if rj else None
         u.pop("rest_json", None)
+        fj = u.get("fishing_json")
+        u["fishing"] = _parse_fishing(fj) if fj else None
+        u.pop("fishing_json", None)
         u["next_act_unlocked"] = bool(int(u.get("next_act_unlocked", 0) or 0))
         u["third_act_unlocked"] = bool(int(u.get("third_act_unlocked", 0) or 0))
         u["fourth_act_unlocked"] = bool(int(u.get("fourth_act_unlocked", 0) or 0))
@@ -193,6 +210,8 @@ async def update_user(
     equipped: dict[str, Any] | None = None,
     rest: dict[str, Any] | None = None,
     clear_rest: bool = False,
+    fishing: dict[str, Any] | None = None,
+    clear_fishing: bool = False,
     next_act_unlocked: bool | None = None,
     third_act_unlocked: bool | None = None,
     fourth_act_unlocked: bool | None = None,
@@ -232,6 +251,11 @@ async def update_user(
     elif rest is not None:
         fields.append("rest_json = ?")
         values.append(json.dumps(rest, ensure_ascii=False))
+    if clear_fishing:
+        fields.append("fishing_json = NULL")
+    elif fishing is not None:
+        fields.append("fishing_json = ?")
+        values.append(json.dumps(fishing, ensure_ascii=False))
     if next_act_unlocked is not None:
         fields.append("next_act_unlocked = ?")
         values.append(1 if next_act_unlocked else 0)
@@ -275,6 +299,9 @@ async def users_with_active_expedition() -> list[dict[str, Any]]:
         rj = u.get("rest_json")
         u["rest"] = _parse_rest(rj) if rj else None
         u.pop("rest_json", None)
+        fj = u.get("fishing_json")
+        u["fishing"] = _parse_fishing(fj) if fj else None
+        u.pop("fishing_json", None)
         u["next_act_unlocked"] = bool(int(u.get("next_act_unlocked", 0) or 0))
         u["third_act_unlocked"] = bool(int(u.get("third_act_unlocked", 0) or 0))
         u["fourth_act_unlocked"] = bool(int(u.get("fourth_act_unlocked", 0) or 0))
@@ -297,6 +324,22 @@ async def users_with_rest_finished(now_ts: float) -> list[dict[str, Any]]:
             continue
         rest = u.get("rest")
         if rest and float(rest["end_ts"]) <= now_ts:
+            out.append(u)
+    return out
+
+
+async def users_with_fishing_finished(now_ts: float) -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT user_id FROM users WHERE fishing_json IS NOT NULL")
+        ids = [int(row[0]) for row in await cur.fetchall()]
+    out: list[dict[str, Any]] = []
+    for uid in ids:
+        u = await get_user(uid)
+        if not u:
+            continue
+        fishing = u.get("fishing")
+        if fishing and float(fishing["end_ts"]) <= now_ts:
             out.append(u)
     return out
 

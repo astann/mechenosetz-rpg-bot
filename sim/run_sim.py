@@ -89,6 +89,63 @@ def _align_to_active_window(sim_now: float) -> float:
     return sim_now
 
 
+def _do_fishing(state: dict[str, Any], sim_now: float) -> float:
+    # 2 часа на рыбалку, улов 1-2 рыбы.
+    sim_now += 2 * 3600
+    for _ in range(random.randint(1, 2)):
+        state["fish_heals"].append(random.randint(10, 22))
+    return sim_now
+
+
+def _consume_fish_if_needed(state: dict[str, Any], threshold_ratio: float) -> None:
+    hp = int(state["hp_current"])
+    hp_max = int(state["hp_max"])
+    if hp >= int(hp_max * threshold_ratio):
+        return
+    heals = list(state["fish_heals"])
+    if not heals:
+        return
+    heals.sort(reverse=True)
+    while heals and hp < int(hp_max * threshold_ratio):
+        hp = min(hp_max, hp + heals.pop(0))
+        state["fish_used"] += 1
+    state["fish_heals"] = heals
+    state["hp_current"] = hp
+
+
+def _consume_fish_to_full(state: dict[str, Any]) -> None:
+    hp = int(state["hp_current"])
+    hp_max = int(state["hp_max"])
+    if hp >= hp_max:
+        return
+    heals = list(state["fish_heals"])
+    if not heals:
+        return
+    heals.sort(reverse=True)
+    while heals and hp < hp_max:
+        hp = min(hp_max, hp + heals.pop(0))
+        state["fish_used"] += 1
+    state["fish_heals"] = heals
+    state["hp_current"] = hp
+
+
+def _consume_fish_to_threshold(state: dict[str, Any], threshold_ratio: float) -> None:
+    hp = int(state["hp_current"])
+    hp_max = int(state["hp_max"])
+    target = int(hp_max * threshold_ratio)
+    if hp >= target:
+        return
+    heals = list(state["fish_heals"])
+    if not heals:
+        return
+    heals.sort(reverse=True)
+    while heals and hp < target:
+        hp = min(hp_max, hp + heals.pop(0))
+        state["fish_used"] += 1
+    state["fish_heals"] = heals
+    state["hp_current"] = hp
+
+
 def _run_expedition(state: dict[str, Any], dungeon_id: str, sim_now: float) -> tuple[dict[str, Any], float]:
     d = dungeon_by_id(dungeon_id)
     if not d:
@@ -107,6 +164,9 @@ def _run_expedition(state: dict[str, Any], dungeon_id: str, sim_now: float) -> t
         next_event_ts = float(expedition["next_event_ts"])
         if sim_now >= end_ts:
             break
+        # Внутри подземелья лечимся рыбой только при заметной просадке HP.
+        _consume_fish_to_threshold(state, 0.60)
+        expedition["hp"] = int(state["hp_current"])
         # Гарантируем ход времени минимум на 1 сек, чтобы не застревать на одном timestamp.
         sim_now = max(sim_now + 1.0, next_event_ts)
         prev_now = exp_mod.now_ts
@@ -195,6 +255,9 @@ def _simulate_one(seed: int) -> dict[str, Any]:
         "black_wall_win_at": None,
         "weapon_tier": 0,
         "armor_tier": 0,
+        "fish_heals": [],
+        "fish_used": 0,
+        "fishing_trips": 0,
     }
 
     while state["runs"] < 2000:
@@ -204,6 +267,19 @@ def _simulate_one(seed: int) -> dict[str, Any]:
 
         # Консервативная политика выживания.
         rest_threshold = 0.92 if state["third_act_unlocked"] else 0.75
+        _consume_fish_if_needed(state, rest_threshold)
+        # Если рыбы нет и HP низкое, сначала пробуем рыбалку.
+        fish_threshold = 0.88 if state["third_act_unlocked"] else 0.68
+        if (
+            state["hp_current"] < int(state["hp_max"] * fish_threshold)
+            and not state["fish_heals"]
+        ):
+            state["fishing_trips"] += 1
+            sim_now = _do_fishing(state, sim_now)
+            _consume_fish_if_needed(state, rest_threshold)
+        # Если есть рыба, не идем в отдых — лечимся ей до капа.
+        if state["fish_heals"]:
+            _consume_fish_to_full(state)
         if state["hp_current"] < int(state["hp_max"] * rest_threshold):
             state["rests"] += 1
             sim_now += 6 * 3600
@@ -245,6 +321,9 @@ def _simulate_one(seed: int) -> dict[str, Any]:
         "completed": bool(state["completed"]),
         "weapon_tier": int(state["weapon_tier"]),
         "armor_tier": int(state["armor_tier"]),
+        "fishing_trips": int(state["fishing_trips"]),
+        "fish_used": int(state["fish_used"]),
+        "fish_left": len(state["fish_heals"]),
     }
 
 
@@ -320,6 +399,8 @@ def main() -> None:
         },
         "deaths_mean": round(statistics.mean(int(r["deaths"]) for r in rows), 2),
         "rests_mean": round(statistics.mean(int(r["rests"]) for r in rows), 2),
+        "fishing_trips_mean": round(statistics.mean(int(r["fishing_trips"]) for r in rows), 2),
+        "fish_used_mean": round(statistics.mean(int(r["fish_used"]) for r in rows), 2),
         "runs_mean": round(statistics.mean(int(r["runs"]) for r in rows), 2),
     }
     summary["time_to_black_wall_human"] = {

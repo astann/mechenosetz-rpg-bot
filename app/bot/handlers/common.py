@@ -47,7 +47,7 @@ async def send_menu_screen(message: Message) -> None:
         return
     await message.answer(
         status_text(u),
-        reply_markup=kb_main(u.get("expedition"), u.get("rest")),
+        reply_markup=kb_main(u.get("expedition"), u.get("rest"), u.get("fishing")),
     )
 
 
@@ -67,7 +67,7 @@ async def start(message: Message) -> None:
     )
     await message.answer(
         status_text(u),
-        reply_markup=kb_main(u.get("expedition"), u.get("rest")),
+        reply_markup=kb_main(u.get("expedition"), u.get("rest"), u.get("fishing")),
     )
 
 
@@ -91,6 +91,11 @@ async def cmd_dungeons(message: Message) -> None:
     if u.get("rest"):
         await message.answer(
             "Герой отдыхает. Подземелья будут доступны после пробуждения или окончания отдыха."
+        )
+        return
+    if u.get("fishing"):
+        await message.answer(
+            "Герой на рыбалке. Подземелья будут доступны после возвращения."
         )
         return
     act = _effective_act(u)
@@ -117,7 +122,7 @@ async def nav_main(cq: CallbackQuery) -> None:
     if cq.message:
         await cq.message.edit_text(
             status_text(u),
-            reply_markup=kb_main(u.get("expedition"), u.get("rest")),
+            reply_markup=kb_main(u.get("expedition"), u.get("rest"), u.get("fishing")),
         )
     await cq.answer()
 
@@ -134,6 +139,9 @@ async def nav_dungeons(cq: CallbackQuery) -> None:
         return
     if u.get("rest"):
         await cq.answer("Герой отдыхает. Сначала разбудите его.", show_alert=True)
+        return
+    if u.get("fishing"):
+        await cq.answer("Герой на рыбалке. Сначала верните его.", show_alert=True)
         return
     act = _effective_act(u)
     if int(u.get("selected_act", 1) or 1) != act:

@@ -43,7 +43,7 @@ async def expedition_flee_confirm(cq: CallbackQuery) -> None:
             if nu:
                 await cq.message.edit_text(
                     status_text(nu),
-                    reply_markup=kb_main(nu.get("expedition"), nu.get("rest")),
+                    reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
                 )
         return
     hp_exp = max(1, min(int(u["hp_max"]), int(exp["hp"])))
@@ -58,6 +58,6 @@ async def expedition_flee_confirm(cq: CallbackQuery) -> None:
         await cq.bot.send_message(
             nu["user_id"],
             status_text(nu),
-            reply_markup=kb_main(nu.get("expedition"), nu.get("rest")),
+            reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
         )
     await cq.answer()

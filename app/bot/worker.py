@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 
 from aiogram import Bot
 
@@ -42,7 +43,36 @@ async def process_rests(bot: Bot) -> None:
             await bot.send_message(
                 uid,
                 status_text(nu),
-                reply_markup=kb_main(nu.get("expedition"), nu.get("rest")),
+                reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
+            )
+
+
+async def process_fishing(bot: Bot) -> None:
+    now = now_ts()
+    for u in await db.users_with_fishing_finished(now):
+        uid = int(u["user_id"])
+        catch_n = random.randint(1, 2)
+        inv = list(u.get("inventory") or [])
+        for _ in range(catch_n):
+            inv.append(
+                {
+                    "kind": "item",
+                    "name": "Свежая рыба",
+                    "effect": "heal",
+                    "value": random.randint(10, 22),
+                }
+            )
+        await db.update_user(uid, inventory=inv, clear_fishing=True)
+        await bot.send_message(
+            uid,
+            f"🎣 Герой вернулся с рыбалки. Поймано рыбы: {catch_n}.",
+        )
+        nu = await db.get_user(uid)
+        if nu:
+            await bot.send_message(
+                uid,
+                status_text(nu),
+                reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
             )
 
 
@@ -150,7 +180,7 @@ async def process_expeditions(bot: Bot) -> None:
                     await bot.send_message(
                         nu["user_id"],
                         status_text(nu),
-                        reply_markup=kb_main(nu.get("expedition"), nu.get("rest")),
+                        reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
                     )
             continue
 
@@ -200,7 +230,7 @@ async def process_expeditions(bot: Bot) -> None:
                 await bot.send_message(
                     nu["user_id"],
                     status_text(nu),
-                    reply_markup=kb_main(nu.get("expedition"), nu.get("rest")),
+                    reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
                 )
             continue
 
@@ -226,6 +256,7 @@ async def expedition_worker(bot: Bot) -> None:
         try:
             await process_expeditions(bot)
             await process_rests(bot)
+            await process_fishing(bot)
         except Exception:
             logging.exception("Expedition worker failed")
         await asyncio.sleep(6)

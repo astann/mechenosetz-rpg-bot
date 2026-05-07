@@ -62,9 +62,23 @@ def kb_flee_confirm() -> InlineKeyboardMarkup:
     )
 
 
+def kb_fishing_stop_confirm() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, вернуться", callback_data="fish:stop:yes"
+                ),
+                InlineKeyboardButton(text="Отмена", callback_data="nav:main"),
+            ],
+        ]
+    )
+
+
 def kb_main(
     expedition: dict | None = None,
     rest: dict[str, Any] | None = None,
+    fishing: dict[str, Any] | None = None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if expedition:
@@ -82,12 +96,23 @@ def kb_main(
                 ),
             ]
         )
+    elif fishing:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Вернуться с рыбалки", callback_data="fish:stop"
+                ),
+            ]
+        )
     else:
         rows.append(
             [InlineKeyboardButton(text="Подземелья", callback_data="nav:dungeons")]
         )
         rows.append([InlineKeyboardButton(text="Магазин", callback_data="nav:shop")])
         rows.append([InlineKeyboardButton(text="Инвентарь", callback_data="nav:inv")])
+        rows.append(
+            [InlineKeyboardButton(text="Рыбалка (2 ч)", callback_data="fish:start")]
+        )
         rows.append(
             [InlineKeyboardButton(text="Отдых (6 ч)", callback_data="rest:start")]
         )
