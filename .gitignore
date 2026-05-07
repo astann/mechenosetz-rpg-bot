@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/
+
+# Python caches/build
+*.pyo
+*.pyd
+*.so
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# IDE / OS junk
+.DS_Store
+.idea/
+.vscode/

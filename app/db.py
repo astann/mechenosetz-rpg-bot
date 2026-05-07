@@ -1,0 +1,281 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import aiosqlite
+
+from app.config import DATA_DIR, DB_PATH
+
+SCHEMA_USERS = """
+CREATE TABLE IF NOT EXISTS users (
+  user_id INTEGER PRIMARY KEY,
+  username TEXT,
+  level INTEGER NOT NULL DEFAULT 1,
+  xp INTEGER NOT NULL DEFAULT 0,
+  gold INTEGER NOT NULL DEFAULT 0,
+  hp_max INTEGER NOT NULL DEFAULT 100,
+  hp_current INTEGER NOT NULL DEFAULT 100,
+  expedition_json TEXT,
+  inventory_json TEXT NOT NULL DEFAULT '[]',
+  equipped_json TEXT NOT NULL DEFAULT '{}'
+);
+"""
+
+SCHEMA_SHOP = """
+CREATE TABLE IF NOT EXISTS shop_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  day TEXT NOT NULL DEFAULT '',
+  spin TEXT NOT NULL DEFAULT '',
+  items_json TEXT NOT NULL DEFAULT '[]'
+);
+"""
+
+_PLAYERS_WIPE_MARKER = DATA_DIR / ".mechenosetz_players_cleared_v1"
+
+
+async def init_db() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(SCHEMA_USERS)
+        await db.execute(SCHEMA_SHOP)
+        cur = await db.execute("PRAGMA table_info(users)")
+        cols = {row[1] for row in await cur.fetchall()}
+        if "inventory_json" not in cols:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN inventory_json TEXT NOT NULL DEFAULT '[]'"
+            )
+        if "equipped_json" not in cols:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN equipped_json TEXT NOT NULL DEFAULT '{}'"
+            )
+        if "rest_json" not in cols:
+            await db.execute("ALTER TABLE users ADD COLUMN rest_json TEXT")
+        cur_shop = await db.execute("PRAGMA table_info(shop_state)")
+        shop_cols = {row[1] for row in await cur_shop.fetchall()}
+        if shop_cols and "spin" not in shop_cols:
+            await db.execute(
+                "ALTER TABLE shop_state ADD COLUMN spin TEXT NOT NULL DEFAULT ''"
+            )
+        await db.execute(
+            "INSERT OR IGNORE INTO shop_state (id, day, spin, items_json) VALUES (1, '', '', '[]')"
+        )
+        await db.commit()
+
+    if not _PLAYERS_WIPE_MARKER.exists():
+        await clear_all_players(reset_shop=True)
+        _PLAYERS_WIPE_MARKER.write_text("", encoding="utf-8")
+
+
+async def ensure_user(user_id: int, username: str | None) -> dict[str, Any]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        row = await cur.fetchone()
+        if row:
+            await db.execute(
+                "UPDATE users SET username = ? WHERE user_id = ?",
+                (username or "", user_id),
+            )
+            await db.commit()
+            return await get_user(user_id)  # type: ignore
+        await db.execute(
+            "INSERT INTO users (user_id, username) VALUES (?, ?)",
+            (user_id, username or ""),
+        )
+        await db.commit()
+    return await get_user(user_id)  # type: ignore
+
+
+def _parse_exp(raw: str | None) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("expedition_json must be a JSON object")
+    return data
+
+
+def _parse_json_list(raw: str | None) -> list[Any]:
+    if not raw:
+        return []
+    data = json.loads(raw)
+    if not isinstance(data, list):
+        raise ValueError("inventory_json must be a JSON array")
+    return data
+
+
+def _parse_rest(raw: str | None) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("rest_json must be a JSON object")
+    end_ts = data.get("end_ts")
+    if end_ts is None:
+        raise ValueError("rest_json must contain end_ts")
+    return {"end_ts": float(end_ts)}
+
+
+def _parse_json_dict(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("equipped_json must be a JSON object")
+    return data
+
+
+async def get_user(user_id: int) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        row = await cur.fetchone()
+        if not row:
+            return None
+        u = dict(row)
+        u["expedition"] = _parse_exp(u.get("expedition_json"))
+        u.pop("expedition_json", None)
+        u["inventory"] = _parse_json_list(u.get("inventory_json"))
+        u.pop("inventory_json", None)
+        u["equipped"] = _parse_json_dict(u.get("equipped_json"))
+        u.pop("equipped_json", None)
+        rj = u.get("rest_json")
+        u["rest"] = _parse_rest(rj) if rj else None
+        u.pop("rest_json", None)
+        return u
+
+
+async def update_user(
+    user_id: int,
+    *,
+    level: int | None = None,
+    xp: int | None = None,
+    gold: int | None = None,
+    hp_current: int | None = None,
+    hp_max: int | None = None,
+    expedition: dict[str, Any] | None = None,
+    clear_expedition: bool = False,
+    inventory: list[dict[str, Any]] | None = None,
+    equipped: dict[str, Any] | None = None,
+    rest: dict[str, Any] | None = None,
+    clear_rest: bool = False,
+) -> None:
+    fields: list[str] = []
+    values: list[Any] = []
+    if level is not None:
+        fields.append("level = ?")
+        values.append(level)
+    if xp is not None:
+        fields.append("xp = ?")
+        values.append(xp)
+    if gold is not None:
+        fields.append("gold = ?")
+        values.append(gold)
+    if hp_current is not None:
+        fields.append("hp_current = ?")
+        values.append(hp_current)
+    if hp_max is not None:
+        fields.append("hp_max = ?")
+        values.append(hp_max)
+    if clear_expedition:
+        fields.append("expedition_json = NULL")
+    elif expedition is not None:
+        fields.append("expedition_json = ?")
+        values.append(json.dumps(expedition, ensure_ascii=False))
+    if inventory is not None:
+        fields.append("inventory_json = ?")
+        values.append(json.dumps(inventory, ensure_ascii=False))
+    if equipped is not None:
+        fields.append("equipped_json = ?")
+        values.append(json.dumps(equipped, ensure_ascii=False))
+    if clear_rest:
+        fields.append("rest_json = NULL")
+    elif rest is not None:
+        fields.append("rest_json = ?")
+        values.append(json.dumps(rest, ensure_ascii=False))
+    if not fields:
+        return
+    values.append(user_id)
+    sql = f"UPDATE users SET {', '.join(fields)} WHERE user_id = ?"
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(sql, values)
+        await db.commit()
+
+
+async def users_with_active_expedition() -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM users WHERE expedition_json IS NOT NULL"
+        )
+        rows = await cur.fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        u = dict(row)
+        u["expedition"] = _parse_exp(u.get("expedition_json"))
+        u.pop("expedition_json", None)
+        u["inventory"] = _parse_json_list(u.get("inventory_json"))
+        u.pop("inventory_json", None)
+        u["equipped"] = _parse_json_dict(u.get("equipped_json"))
+        u.pop("equipped_json", None)
+        rj = u.get("rest_json")
+        u["rest"] = _parse_rest(rj) if rj else None
+        u.pop("rest_json", None)
+        if u["expedition"]:
+            out.append(u)
+    return out
+
+
+async def users_with_rest_finished(now_ts: float) -> list[dict[str, Any]]:
+    """Пользователи, у которых отдых закончился по времени (нужно полное восстановление)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT user_id FROM users WHERE rest_json IS NOT NULL")
+        ids = [int(row[0]) for row in await cur.fetchall()]
+    out: list[dict[str, Any]] = []
+    for uid in ids:
+        u = await get_user(uid)
+        if not u:
+            continue
+        rest = u.get("rest")
+        if rest and float(rest["end_ts"]) <= now_ts:
+            out.append(u)
+    return out
+
+
+async def get_shop_state() -> tuple[str, list[dict[str, Any]]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT day, items_json FROM shop_state WHERE id = 1"
+        )
+        row = await cur.fetchone()
+        if not row:
+            return "", []
+        day = str(row["day"] or "")
+        raw = row["items_json"] or "[]"
+        items = json.loads(raw)
+        if not isinstance(items, list):
+            raise ValueError("shop items_json must be a JSON array")
+        return day, [x for x in items if isinstance(x, dict)]
+
+
+async def set_shop_state(day: str, items: list[dict[str, Any]]) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE shop_state SET day = ?, spin = '', items_json = ? WHERE id = 1",
+            (day, json.dumps(items, ensure_ascii=False)),
+        )
+        await db.commit()
+
+
+async def clear_all_players(*, reset_shop: bool = True) -> None:
+    """Удалить всех пользователей. По желанию сбросить глобальную витрину магазина."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM users")
+        if reset_shop:
+            await db.execute(
+                "UPDATE shop_state SET day = '', spin = '', items_json = '[]' WHERE id = 1"
+            )
+        await db.commit()
