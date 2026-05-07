@@ -19,10 +19,12 @@ from app.game import (
     process_event,
     xp_for_next_level,
 )
+from app.game.monsters import final_boss_for_dungeon
 from app.shop import equipment_bonuses
 
 _FLAVOR_GAP_SEC = 6.0
 _FLAVOR_MIN_BEFORE_EVENT_SEC = 4.0
+_BLACK_WALL_BOSS_HP = 300
 
 
 async def process_rests(bot: Bot) -> None:
@@ -56,8 +58,15 @@ async def process_expeditions(bot: Bot) -> None:
             await db.update_user(u["user_id"], clear_expedition=True)
             continue
 
-        if now >= float(exp["next_event_ts"]) and now < float(exp["end_ts"]):
+        boss = final_boss_for_dungeon(d.id)
+        boss_pending_after_end = (
+            boss is not None
+            and not bool(exp.get("boss_done"))
+            and now >= float(exp["end_ts"])
+        )
+        if (now >= float(exp["next_event_ts"]) and now < float(exp["end_ts"])) or boss_pending_after_end:
             df, wm = equipment_bonuses(u.get("equipped") or {})
+            was_boss_done = bool(exp.get("boss_done"))
             exp, text = process_event(
                 expedition=exp,
                 level=int(u["level"]),
@@ -75,6 +84,57 @@ async def process_expeditions(bot: Bot) -> None:
                 u["user_id"],
                 f"🕯 <b>{d.title}</b>\n{text}",
             )
+            if (
+                not was_boss_done
+                and bool(exp.get("boss_done"))
+                and int(exp.get("hp", 0)) > 0
+            ):
+                if d.id == "lair" and not bool(u.get("next_act_unlocked")):
+                    await db.update_user(u["user_id"], next_act_unlocked=True)
+                    await bot.send_message(
+                        u["user_id"],
+                        (
+                            "📜 Победа над Колдуном разорвала древнюю печать.\n"
+                            "Открыт путь во 2 акт."
+                        ),
+                    )
+                    u["next_act_unlocked"] = True
+                elif d.id == "abyss_cathedral" and not bool(u.get("third_act_unlocked")):
+                    await db.update_user(u["user_id"], third_act_unlocked=True)
+                    await bot.send_message(
+                        u["user_id"],
+                        (
+                            "📜 Порождение Бездны повержено, и Черная Стена дрогнула.\n"
+                            "Открыт путь в 3 акт."
+                        ),
+                    )
+                    u["third_act_unlocked"] = True
+                elif d.id == "black_wall":
+                    hp_left_global = await db.damage_black_wall(_BLACK_WALL_BOSS_HP)
+                    if hp_left_global > 0:
+                        await bot.send_message(
+                            u["user_id"],
+                            (
+                                f"🧱 Черная Стена дрогнула, но устояла. "
+                                f"Снято {_BLACK_WALL_BOSS_HP} общего HP "
+                                f"(осталось: {hp_left_global}).\n"
+                                "Ищите помощи других меченосцев."
+                            ),
+                        )
+                    else:
+                        await db.unlock_act4_for_all()
+                        for uid in await db.all_user_ids():
+                            try:
+                                await bot.send_message(
+                                    uid,
+                                    (
+                                        "🧱 Черная Стена рухнула под натиском меченосцев.\n"
+                                        "Открыт путь в 4 акт."
+                                    ),
+                                )
+                            except Exception:
+                                logging.exception("Failed to notify user %s about act 4", uid)
+                        u["fourth_act_unlocked"] = True
             if hp <= 0:
                 await db.update_user(
                     u["user_id"],
@@ -96,18 +156,24 @@ async def process_expeditions(bot: Bot) -> None:
 
         if now >= float(exp["end_ts"]):
             hp_left = max(1, int(exp["hp"]))
+            bonus_gold = int(exp.get("bonus_gold", 0))
+            bonus_xp = int(exp.get("bonus_xp", 0))
+            loot_boost = float(exp.get("loot_boost", 0.0))
             rewards = finish_rewards(
                 dungeon=d,
                 level=int(u["level"]),
                 hp=hp_left,
                 hp_max=int(u["hp_max"]),
+                loot_boost=loot_boost,
             )
-            xp = int(u["xp"]) + int(rewards["xp"])
+            xp_gain = int(rewards["xp"]) + bonus_xp
+            gold_gain = int(rewards["gold"]) + bonus_gold
+            xp = int(u["xp"]) + xp_gain
             level = int(u["level"])
             while xp >= xp_for_next_level(level):
                 xp -= xp_for_next_level(level)
                 level += 1
-            gold = int(u["gold"]) + int(rewards["gold"])
+            gold = int(u["gold"]) + gold_gain
             hp_max_new = hp_max_for_level(level)
             hp_after = min(hp_max_new, hp_left)
             await db.update_user(
@@ -124,7 +190,7 @@ async def process_expeditions(bot: Bot) -> None:
                 u["user_id"],
                 (
                     f"🏁 Герой вернулся из <b>{d.title}</b>.\n"
-                    f"+{rewards['xp']} опыта, +{rewards['gold']} золота.\n"
+                    f"+{xp_gain} опыта, +{gold_gain} золота.\n"
                     f"{loot_text}\n"
                     f"HP сейчас: {hp_after}/{hp_max_new}."
                 ),
@@ -151,7 +217,7 @@ async def process_expeditions(bot: Bot) -> None:
                 await db.update_user(u["user_id"], expedition=exp_f)
                 await bot.send_message(
                     u["user_id"],
-                    f"🚶 <b>{d.title}</b>\n{expedition_travel_flavor()}",
+                    f"🚶 <b>{d.title}</b>\n{expedition_travel_flavor(d.id)}",
                 )
 
 

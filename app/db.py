@@ -31,6 +31,13 @@ CREATE TABLE IF NOT EXISTS shop_state (
 );
 """
 
+SCHEMA_WORLD = """
+CREATE TABLE IF NOT EXISTS world_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  black_wall_hp INTEGER NOT NULL DEFAULT 3000
+);
+"""
+
 _PLAYERS_WIPE_MARKER = DATA_DIR / ".mechenosetz_players_cleared_v1"
 
 
@@ -39,6 +46,7 @@ async def init_db() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(SCHEMA_USERS)
         await db.execute(SCHEMA_SHOP)
+        await db.execute(SCHEMA_WORLD)
         cur = await db.execute("PRAGMA table_info(users)")
         cols = {row[1] for row in await cur.fetchall()}
         if "inventory_json" not in cols:
@@ -51,6 +59,24 @@ async def init_db() -> None:
             )
         if "rest_json" not in cols:
             await db.execute("ALTER TABLE users ADD COLUMN rest_json TEXT")
+        if "next_act_unlocked" not in cols:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN next_act_unlocked INTEGER NOT NULL DEFAULT 0"
+            )
+        if "third_act_unlocked" not in cols:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN third_act_unlocked INTEGER NOT NULL DEFAULT 0"
+            )
+        if "fourth_act_unlocked" not in cols:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN fourth_act_unlocked INTEGER NOT NULL DEFAULT 0"
+            )
+        if "selected_act" not in cols:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN selected_act INTEGER NOT NULL DEFAULT 1"
+            )
+        if "player_name" not in cols:
+            await db.execute("ALTER TABLE users ADD COLUMN player_name TEXT")
         cur_shop = await db.execute("PRAGMA table_info(shop_state)")
         shop_cols = {row[1] for row in await cur_shop.fetchall()}
         if shop_cols and "spin" not in shop_cols:
@@ -59,6 +85,9 @@ async def init_db() -> None:
             )
         await db.execute(
             "INSERT OR IGNORE INTO shop_state (id, day, spin, items_json) VALUES (1, '', '', '[]')"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO world_state (id, black_wall_hp) VALUES (1, 3000)"
         )
         await db.commit()
 
@@ -143,6 +172,10 @@ async def get_user(user_id: int) -> dict[str, Any] | None:
         rj = u.get("rest_json")
         u["rest"] = _parse_rest(rj) if rj else None
         u.pop("rest_json", None)
+        u["next_act_unlocked"] = bool(int(u.get("next_act_unlocked", 0) or 0))
+        u["third_act_unlocked"] = bool(int(u.get("third_act_unlocked", 0) or 0))
+        u["fourth_act_unlocked"] = bool(int(u.get("fourth_act_unlocked", 0) or 0))
+        u["selected_act"] = int(u.get("selected_act", 1) or 1)
         return u
 
 
@@ -160,6 +193,11 @@ async def update_user(
     equipped: dict[str, Any] | None = None,
     rest: dict[str, Any] | None = None,
     clear_rest: bool = False,
+    next_act_unlocked: bool | None = None,
+    third_act_unlocked: bool | None = None,
+    fourth_act_unlocked: bool | None = None,
+    selected_act: int | None = None,
+    player_name: str | None = None,
 ) -> None:
     fields: list[str] = []
     values: list[Any] = []
@@ -194,6 +232,21 @@ async def update_user(
     elif rest is not None:
         fields.append("rest_json = ?")
         values.append(json.dumps(rest, ensure_ascii=False))
+    if next_act_unlocked is not None:
+        fields.append("next_act_unlocked = ?")
+        values.append(1 if next_act_unlocked else 0)
+    if third_act_unlocked is not None:
+        fields.append("third_act_unlocked = ?")
+        values.append(1 if third_act_unlocked else 0)
+    if fourth_act_unlocked is not None:
+        fields.append("fourth_act_unlocked = ?")
+        values.append(1 if fourth_act_unlocked else 0)
+    if selected_act is not None:
+        fields.append("selected_act = ?")
+        values.append(int(selected_act))
+    if player_name is not None:
+        fields.append("player_name = ?")
+        values.append(player_name)
     if not fields:
         return
     values.append(user_id)
@@ -222,6 +275,10 @@ async def users_with_active_expedition() -> list[dict[str, Any]]:
         rj = u.get("rest_json")
         u["rest"] = _parse_rest(rj) if rj else None
         u.pop("rest_json", None)
+        u["next_act_unlocked"] = bool(int(u.get("next_act_unlocked", 0) or 0))
+        u["third_act_unlocked"] = bool(int(u.get("third_act_unlocked", 0) or 0))
+        u["fourth_act_unlocked"] = bool(int(u.get("fourth_act_unlocked", 0) or 0))
+        u["selected_act"] = int(u.get("selected_act", 1) or 1)
         if u["expedition"]:
             out.append(u)
     return out
@@ -279,3 +336,40 @@ async def clear_all_players(*, reset_shop: bool = True) -> None:
                 "UPDATE shop_state SET day = '', spin = '', items_json = '[]' WHERE id = 1"
             )
         await db.commit()
+
+
+async def get_black_wall_hp() -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT black_wall_hp FROM world_state WHERE id = 1")
+        row = await cur.fetchone()
+        if not row:
+            return 0
+        return int(row[0] or 0)
+
+
+async def damage_black_wall(amount: int) -> int:
+    dmg = max(0, int(amount))
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT black_wall_hp FROM world_state WHERE id = 1")
+        row = await cur.fetchone()
+        hp = int(row[0] or 0) if row else 0
+        hp_new = max(0, hp - dmg)
+        await db.execute(
+            "UPDATE world_state SET black_wall_hp = ? WHERE id = 1",
+            (hp_new,),
+        )
+        await db.commit()
+    return hp_new
+
+
+async def unlock_act4_for_all() -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET fourth_act_unlocked = 1")
+        await db.commit()
+
+
+async def all_user_ids() -> list[int]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT user_id FROM users")
+        rows = await cur.fetchall()
+    return [int(r[0]) for r in rows]

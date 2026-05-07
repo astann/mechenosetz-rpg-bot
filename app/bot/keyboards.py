@@ -4,9 +4,24 @@ from __future__ import annotations
 
 from typing import Any
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 
 from app.game.dungeons import DUNGEONS
+
+
+def _dungeon_skulls(danger: float) -> str:
+    if danger < 2.0:
+        n = 1
+    elif danger < 4.0:
+        n = 2
+    else:
+        n = 3
+    return "💀" * n
 
 
 def _shop_button_label(s: dict) -> str:
@@ -79,6 +94,19 @@ def kb_main(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def kb_debug() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="🩹 Лечение"),
+                KeyboardButton(text="💰 +100 золота"),
+                KeyboardButton(text="⭐ +100 опыта"),
+            ]
+        ],
+        resize_keyboard=True,
+    )
+
+
 def kb_shop(items: list[dict]) -> InlineKeyboardMarkup:
     by_slot = sorted(items, key=lambda x: int(x.get("slot", 0)))
     rows: list[list[InlineKeyboardButton]] = []
@@ -122,16 +150,62 @@ def kb_inventory(inv: list[dict], *, inv_back: str = "shop") -> InlineKeyboardMa
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def kb_dungeons() -> InlineKeyboardMarkup:
+def kb_dungeons(
+    current_act: int = 1,
+    next_act_unlocked: bool = False,
+    third_act_unlocked: bool = False,
+    fourth_act_unlocked: bool = False,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    if current_act not in (1, 2, 3):
+        current_act = 1
+    max_open_act = (
+        4
+        if fourth_act_unlocked
+        else 3
+        if third_act_unlocked
+        else 2
+        if next_act_unlocked
+        else 1
+    )
     for d in DUNGEONS:
+        if d.act != current_act:
+            continue
+        if d.act > max_open_act:
+            continue
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{d.title} (~{(d.duration_seconds + 59) // 60} мин)",
+                    text=f"{d.title} {_dungeon_skulls(d.danger)}",
                     callback_data=f"run:{d.id}",
                 )
             ]
         )
+    nav: list[InlineKeyboardButton] = []
+    if current_act > 1:
+        nav.append(
+            InlineKeyboardButton(
+                text=f"← Акт {current_act - 1}",
+                callback_data=f"act:view:{current_act - 1}",
+            )
+        )
+    if current_act < max_open_act:
+        nav.append(
+            InlineKeyboardButton(
+                text=f"Акт {current_act + 1} →",
+                callback_data=f"act:view:{current_act + 1}",
+            )
+        )
+    elif current_act == max_open_act and max_open_act < 3:
+        nav.append(
+            InlineKeyboardButton(
+                text=f"Акт {max_open_act + 1} 🔒",
+                callback_data="act:locked",
+            )
+        )
+    if nav:
+        rows.append(nav)
+    if current_act == 4:
+        rows.append([InlineKeyboardButton(text="Подземелья акта IV пока недоступны", callback_data="act:empty")])
     rows.append([InlineKeyboardButton(text="Назад", callback_data="nav:main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

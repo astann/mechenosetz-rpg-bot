@@ -39,7 +39,9 @@ def status_text(u: dict) -> str:
     eq_line = ""
     if df or wm:
         eq_line = f"Экипировка: защита −{df} урона, атака −{wm} урона.\n"
+    name = str(u.get("player_name") or "Безымянный")
     base = (
+        f"Имя: {name}\n"
         f"Уровень: {u['level']}\n"
         f"Опыт: {u['xp']}\n"
         f"Золото: {u['gold']}\n"

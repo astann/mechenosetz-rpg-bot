@@ -7,6 +7,14 @@ import time
 from typing import Any
 
 from app.game.dungeons import Dungeon, dungeon_by_id
+from app.game.monsters import (
+    encounter_difficulty,
+    encounter_title,
+    final_boss_for_dungeon,
+    sample_encounter,
+)
+from app.game.noncombat_events import apply_noncombat_event
+from app.game.travel_flavor import expedition_travel_flavor
 
 
 def xp_for_next_level(level: int) -> int:
@@ -14,7 +22,7 @@ def xp_for_next_level(level: int) -> int:
 
 
 def hp_max_for_level(level: int) -> int:
-    return 100 + max(0, level - 1) * 5
+    return 100 + max(0, level - 1) * 15
 
 
 def now_ts() -> float:
@@ -30,6 +38,9 @@ def expedition_event_interval_seconds(dungeon: Dungeon) -> tuple[int, int]:
 
 
 def _schedule_next_event_ts(expedition: dict[str, Any], dungeon: Dungeon) -> float:
+    if bool(expedition.get("boss_done")) and final_boss_for_dungeon(dungeon.id):
+        # После финального босса дополнительных событий быть не должно.
+        return float(expedition["end_ts"])
     ev_lo, ev_hi = expedition_event_interval_seconds(dungeon)
     risk = max(-0.6, min(2.5, float(expedition.get("risk", 0.0))))
     # Больше риска -> события происходят чаще; меньше риска -> реже.
@@ -51,39 +62,6 @@ def _schedule_next_event_ts(expedition: dict[str, Any], dungeon: Dungeon) -> flo
     return min(candidate, end - 1.0)
 
 
-_EXPEDITION_TRAVEL_LINES: tuple[str, ...] = (
-    "Герой пробирается вперёд по узкому проходу…",
-    "Под ногами хрустят камешки; в темноте трудно держать направление.",
-    "Свет факела прыгает по мокрым стенам.",
-    "Герой замирает, вслушиваясь — впереди что-то капает.",
-    "Короткая передышка: герой поправляет ремень и снова в путь.",
-    "Проход извивается; кажется, лабиринт нарочно ведёт кругами.",
-    "Из-за поворота тянет холодом — герой шагает осторожнее.",
-    "На стене видны старые царапины… кто-то уже проходил здесь раньше.",
-    "Герой перепрыгивает трещину в полу и продолжает путь.",
-    "Тишина давит на уши; только эхо собственных шагов.",
-    "Воздух становится тяжелее — близко глубина или древняя магия.",
-    "Герой пригибается под низким сводом и выбирается в следующий зал.",
-    "Мимо скользит тень — то ли игра света, то ли нечто живое.",
-    "Путь уводит вниз по крутым ступеням, в неведомую глубину.",
-    "Герой отмечает метку на стене, чтобы не заблудиться при отступлении.",
-    "Слышен далёкий гул — ветер в расщелине или зверь?",
-    "Под ногой хрустает сухая кость. Герой не задерживается.",
-    "Проход расширяется; на миг кажется, что тьма отступила.",
-    "Герой переводит дух и сжимает рукоять крепче.",
-    "Впереди мерцает отблеск — вода, кристаллы или обман глаз?",
-    "Камень под ногой шатается; герой делает шаг в сторону.",
-    "Запах плесени и железа — здесь давно не ступала нога живого.",
-    "Узкий лаз: приходится протискиваться плечом вперёд.",
-    "Герой пересекает ручей по влажным камням, чуть не поскользнувшись.",
-    "Свод над головой уходит в темноту — не видно, где потолок.",
-)
-
-
-def expedition_travel_flavor() -> str:
-    return random.choice(_EXPEDITION_TRAVEL_LINES)
-
-
 def create_expedition(dungeon: Dungeon, hp: int) -> dict[str, Any]:
     start = now_ts()
     end = start + dungeon.duration_seconds
@@ -101,6 +79,11 @@ def create_expedition(dungeon: Dungeon, hp: int) -> dict[str, Any]:
         "hp": hp,
         "risk": 0.0,
         "encounters": 0,
+        "boss_done": False,
+        "bonus_gold": 0,
+        "bonus_xp": 0,
+        "loot_boost": 0.0,
+        "next_fight_bonus": 0.0,
     }
 
 
@@ -119,41 +102,87 @@ def process_event(
     hp = int(expedition["hp"])
     df = max(0, int(defense_flat))
     wa = max(0, int(weapon_attack))
+    bonus_gold = int(expedition.get("bonus_gold", 0))
+    bonus_xp = int(expedition.get("bonus_xp", 0))
+    loot_boost = float(expedition.get("loot_boost", 0.0))
+    next_fight_bonus = float(expedition.get("next_fight_bonus", 0.0))
 
-    fight_chance = max(0.45, min(0.92, 0.68 + risk * 0.1))
-    if random.random() < fight_chance:
+    fight_chance = max(0.45, min(0.95, 0.68 + risk * 0.1 + next_fight_bonus))
+    boss = final_boss_for_dungeon(d.id)
+    boss_due = (
+        boss is not None
+        and not bool(expedition.get("boss_done"))
+        and now_ts() >= float(expedition["end_ts"])
+    )
+    if boss_due or random.random() < fight_chance:
+        next_fight_bonus = 0.0
+        if boss_due and boss is not None:
+            encounter = [boss]
+            expedition["boss_done"] = True
+            expedition["next_event_ts"] = float(expedition["end_ts"])
+        else:
+            encounter_budget = max(0.9, d.danger * 1.3 + max(0.0, risk) * 1.15)
+            encounter = sample_encounter(encounter_budget, dungeon_id=d.id)
+        monsters_txt = encounter_title(encounter)
+        encounter_mult = 0.75 + encounter_difficulty(encounter) / 3.2
         base = 6 + level * 1.4
         risk_damage_mult = 1.0 + max(-0.18, min(0.45, risk * 0.16))
-        raw = (random.randint(3, 9) + base * random.uniform(0.2, 0.55)) * risk_damage_mult
-        # danger=1.0 как база; выше — сильнее удар (совпадает с идеей «опасности» локации)
-        enemy_power = 1.0 + max(0.0, d.danger - 1.0) * 0.75
-        raw *= enemy_power
+        raw = (
+            random.randint(3, 9) + base * random.uniform(0.2, 0.55)
+        ) * risk_damage_mult
+        raw *= encounter_mult
         dmg = int(max(1, raw - wa - df))
         hp = max(0, hp - dmg)
         expedition["encounters"] = int(expedition["encounters"]) + 1
         bonus = ""
         if wa or df:
             bonus = f" (с учётом экипировки: −{wa} атаки, −{df} брони)"
-        text = f"⚔️ Столкновение с врагами. Потеряно {dmg} HP.{bonus}\nТекущее HP: {hp}."
-    else:
-        if random.random() < 0.5:
-            risk = min(2.5, risk + random.uniform(0.08, 0.2))
-            text = "🧭 Герой решает углубиться в неизведанный тоннель (риск выше)."
+        if boss_due:
+            text = (
+                f"👑 Финальный босс: {monsters_txt}. "
+                f"Потеряно {dmg} HP.{bonus}\nТекущее HP: {hp}."
+            )
         else:
-            risk = max(-0.6, risk - random.uniform(0.06, 0.16))
-            text = "🛡 Герой выбирает осторожный путь и обходит опасную зону."
+            text = (
+                f"⚔️ Столкновение: {monsters_txt}. "
+                f"Потеряно {dmg} HP.{bonus}\nТекущее HP: {hp}."
+            )
+    else:
+        noncombat = apply_noncombat_event(
+            dungeon_id=d.id,
+            risk=risk,
+            hp=hp,
+            hp_cap=hp_max_for_level(level),
+            bonus_gold=bonus_gold,
+            bonus_xp=bonus_xp,
+            loot_boost=loot_boost,
+            next_fight_bonus=next_fight_bonus,
+        )
+        risk = noncombat["risk"]
+        hp = noncombat["hp"]
+        bonus_gold = noncombat["bonus_gold"]
+        bonus_xp = noncombat["bonus_xp"]
+        loot_boost = noncombat["loot_boost"]
+        next_fight_bonus = noncombat["next_fight_bonus"]
+        text = noncombat["text"]
 
     expedition["hp"] = hp
     expedition["risk"] = risk
+    expedition["bonus_gold"] = bonus_gold
+    expedition["bonus_xp"] = bonus_xp
+    expedition["loot_boost"] = loot_boost
+    expedition["next_fight_bonus"] = next_fight_bonus
     expedition["next_event_ts"] = _schedule_next_event_ts(expedition, d)
     return expedition, text
 
 
-def finish_rewards(*, dungeon: Dungeon, level: int, hp: int, hp_max: int) -> dict[str, Any]:
+def finish_rewards(
+    *, dungeon: Dungeon, level: int, hp: int, hp_max: int, loot_boost: float = 0.0
+) -> dict[str, Any]:
     hp_ratio = max(0.1, hp / max(1, hp_max))
     level_mult = 1.0 + level * 0.03
 
     xp = int(random.randint(dungeon.xp_min, dungeon.xp_max) * hp_ratio)
     gold = int(random.randint(dungeon.gold_min, dungeon.gold_max) * level_mult)
-    loot = random.random() < (0.18 + dungeon.danger * 0.08)
+    loot = random.random() < (0.18 + dungeon.danger * 0.08 + max(0.0, loot_boost))
     return {"xp": max(1, xp), "gold": max(1, gold), "loot": loot}
