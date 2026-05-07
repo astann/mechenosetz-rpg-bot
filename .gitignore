@@ -21,3 +21,6 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# Simulation outputs
+sim/results/
