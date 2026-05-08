@@ -24,28 +24,9 @@ from app.game import (
     xp_for_next_level,
 )
 from app.game.monsters import final_boss_for_dungeon
+from app.game.shop_catalog import ARMOR_BY_ACT, WEAPONS_BY_ACT
 
 DAY_SECONDS = 24 * 3600
-ACTIVE_SECONDS_PER_DAY = 16 * 3600
-
-WEAPON_TIERS: tuple[tuple[int, int], ...] = (
-    (0, 0),
-    (70, 2),
-    (110, 3),
-    (160, 4),
-    (260, 5),
-    (420, 6),
-)
-
-ARMOR_TIERS: tuple[tuple[int, int], ...] = (
-    (0, 0),
-    (85, 4),
-    (120, 6),
-    (140, 7),
-    (260, 9),
-    (420, 11),
-)
-
 
 def _choose_target_dungeon(state: dict[str, Any]) -> str:
     level = int(state["level"])
@@ -56,36 +37,46 @@ def _choose_target_dungeon(state: dict[str, Any]) -> str:
             return "crypt"
         return "lair"
     if not state["third_act_unlocked"]:
-        if level < 11:
+        if level < 10:
             return "dead_suburb"
-        if level < 16:
+        if level < 14:
             return "gloom_slums"
         return "abyss_cathedral"
+    if level < 17:
+        return "whispering_wasteland"
+    if level < 21:
+        return "ridge_dead_echo"
     return "black_wall"
 
 
 def _buy_upgrades(state: dict[str, Any]) -> None:
-    # Покупаем только следующий тир, если хватает золота.
-    while state["weapon_tier"] + 1 < len(WEAPON_TIERS):
-        nxt = state["weapon_tier"] + 1
-        price, _ = WEAPON_TIERS[nxt]
-        if state["gold"] < price:
-            break
-        state["gold"] -= price
-        state["weapon_tier"] = nxt
-    while state["armor_tier"] + 1 < len(ARMOR_TIERS):
-        nxt = state["armor_tier"] + 1
-        price, _ = ARMOR_TIERS[nxt]
-        if state["gold"] < price:
-            break
-        state["gold"] -= price
-        state["armor_tier"] = nxt
+    # Покупаем лучшее доступное оружие/броню из ассортимента магазина.
+    act = 3 if state["third_act_unlocked"] else 2 if state["next_act_unlocked"] else 1
+    weapons = sorted(
+        WEAPONS_BY_ACT[act],
+        key=lambda x: (int(x.get("attack", 0)), -int(x.get("price", 0))),
+    )
+    armors = sorted(
+        ARMOR_BY_ACT[act],
+        key=lambda x: (int(x.get("defense", 0)), -int(x.get("price", 0))),
+    )
+    for w in weapons:
+        if int(w.get("attack", 0)) <= int(state["weapon_attack"]):
+            continue
+        price = int(w.get("price", 0))
+        if int(state["gold"]) >= price:
+            state["gold"] -= price
+            state["weapon_attack"] = int(w.get("attack", 0))
+    for a in armors:
+        if int(a.get("defense", 0)) <= int(state["armor_defense"]):
+            continue
+        price = int(a.get("price", 0))
+        if int(state["gold"]) >= price:
+            state["gold"] -= price
+            state["armor_defense"] = int(a.get("defense", 0))
 
 
 def _align_to_active_window(sim_now: float) -> float:
-    day_pos = int(sim_now) % DAY_SECONDS
-    if day_pos >= ACTIVE_SECONDS_PER_DAY:
-        return float((int(sim_now) // DAY_SECONDS + 1) * DAY_SECONDS)
     return sim_now
 
 
@@ -175,8 +166,8 @@ def _run_expedition(state: dict[str, Any], dungeon_id: str, sim_now: float) -> t
             expedition, _ = process_event(
                 expedition=expedition,
                 level=int(state["level"]),
-                defense_flat=int(ARMOR_TIERS[int(state["armor_tier"])][1]),
-                weapon_attack=int(WEAPON_TIERS[int(state["weapon_tier"])][1]),
+                defense_flat=int(state["armor_defense"]),
+                weapon_attack=int(state["weapon_attack"]),
             )
         finally:
             exp_mod.now_ts = prev_now  # type: ignore[assignment]
@@ -253,8 +244,8 @@ def _simulate_one(seed: int) -> dict[str, Any]:
         "successes": 0,
         "completed": False,
         "black_wall_win_at": None,
-        "weapon_tier": 0,
-        "armor_tier": 0,
+        "weapon_attack": 0,
+        "armor_defense": 0,
         "fish_heals": [],
         "fish_used": 0,
         "fishing_trips": 0,
@@ -319,8 +310,8 @@ def _simulate_one(seed: int) -> dict[str, Any]:
         "runs": int(state["runs"]),
         "final_level": int(state["level"]),
         "completed": bool(state["completed"]),
-        "weapon_tier": int(state["weapon_tier"]),
-        "armor_tier": int(state["armor_tier"]),
+        "weapon_attack": int(state["weapon_attack"]),
+        "armor_defense": int(state["armor_defense"]),
         "fishing_trips": int(state["fishing_trips"]),
         "fish_used": int(state["fish_used"]),
         "fish_left": len(state["fish_heals"]),

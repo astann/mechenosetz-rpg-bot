@@ -14,6 +14,23 @@ from app.game import hp_max_for_level, xp_for_next_level
 
 router = Router()
 _AWAITING_NAME: set[int] = set()
+_DBG_RESTS: dict[int, int] = {}
+_DBG_FISHINGS: dict[int, int] = {}
+_DBG_REST_HOURS = 6
+_DBG_FISHING_HOURS = 2
+
+
+def _dbg_counts(user_id: int) -> tuple[int, int]:
+    return int(_DBG_RESTS.get(user_id, 0)), int(_DBG_FISHINGS.get(user_id, 0))
+
+
+def _dbg_hours(rests: int, fishings: int) -> int:
+    return rests * _DBG_REST_HOURS + fishings * _DBG_FISHING_HOURS
+
+
+def _dbg_markup(user_id: int):
+    rests, fishings = _dbg_counts(user_id)
+    return kb_debug(rests=rests, fishings=fishings, hours_total=_dbg_hours(rests, fishings))
 
 
 def dungeons_title(act: int) -> str:
@@ -58,12 +75,12 @@ async def start(message: Message) -> None:
         _AWAITING_NAME.add(message.from_user.id)
         await message.answer(
             "Добро пожаловать, меченосец.\nВведите имя героя (2-24 символа):",
-            reply_markup=kb_debug(),
+            reply_markup=_dbg_markup(message.from_user.id),
         )
         return
     await message.answer(
         "Герой готов к походам.",
-        reply_markup=kb_debug(),
+        reply_markup=_dbg_markup(message.from_user.id),
     )
     await message.answer(
         status_text(u),
@@ -218,12 +235,39 @@ async def capture_player_name(message: Message) -> None:
     await send_menu_screen(message)
 
 
-@router.message(F.text == "🩹 Лечение")
-async def dbg_heal(message: Message) -> None:
+@router.message(F.text.startswith("😴 Отдых ("))
+async def dbg_rest(message: Message) -> None:
     u = await db.ensure_user(message.from_user.id, message.from_user.username)
     hp_max = int(u["hp_max"])
     await db.update_user(u["user_id"], hp_current=hp_max)
-    await message.answer("HP восстановлено.")
+    _DBG_RESTS[u["user_id"]] = int(_DBG_RESTS.get(u["user_id"], 0)) + 1
+    await message.answer("Отдых завершён мгновенно. HP восстановлено.", reply_markup=_dbg_markup(u["user_id"]))
+    await send_menu_screen(message)
+
+
+@router.message(F.text.startswith("🎣 Рыбалка ("))
+async def dbg_fishing(message: Message) -> None:
+    u = await db.ensure_user(message.from_user.id, message.from_user.username)
+    inv = list(u.get("inventory") or [])
+    # Отладочная рыбалка мгновенная: 1-2 рыбы.
+    import random
+
+    got = random.randint(1, 2)
+    for _ in range(got):
+        inv.append(
+            {
+                "kind": "item",
+                "name": "Свежая рыба",
+                "effect": "heal",
+                "value": random.randint(10, 22),
+            }
+        )
+    await db.update_user(u["user_id"], inventory=inv)
+    _DBG_FISHINGS[u["user_id"]] = int(_DBG_FISHINGS.get(u["user_id"], 0)) + 1
+    await message.answer(
+        f"Рыбалка завершена мгновенно. Поймано: {got}.",
+        reply_markup=_dbg_markup(u["user_id"]),
+    )
     await send_menu_screen(message)
 
 
@@ -254,3 +298,37 @@ async def dbg_xp(message: Message) -> None:
     )
     await message.answer("+100 опыта.")
     await send_menu_screen(message)
+
+
+@router.message(F.text == "♻️ Сбросить")
+async def dbg_reset(message: Message) -> None:
+    u = await db.ensure_user(message.from_user.id, message.from_user.username)
+    await db.update_user(
+        u["user_id"],
+        level=1,
+        xp=0,
+        gold=0,
+        hp_max=100,
+        hp_current=100,
+        clear_expedition=True,
+        clear_rest=True,
+        clear_fishing=True,
+        inventory=[],
+        equipped={},
+        next_act_unlocked=False,
+        third_act_unlocked=False,
+        fourth_act_unlocked=False,
+        selected_act=1,
+        player_name=None,
+    )
+    _DBG_RESTS[u["user_id"]] = 0
+    _DBG_FISHINGS[u["user_id"]] = 0
+    _AWAITING_NAME.discard(message.from_user.id)
+    await message.answer("Прогресс героя сброшен. Введите новое имя.", reply_markup=_dbg_markup(u["user_id"]))
+    await send_menu_screen(message)
+
+
+@router.message(F.text.startswith("🕒 Часы: "))
+async def dbg_hours_noop(message: Message) -> None:
+    u = await db.ensure_user(message.from_user.id, message.from_user.username)
+    await message.answer("Это индикатор отладочного времени.", reply_markup=_dbg_markup(u["user_id"]))

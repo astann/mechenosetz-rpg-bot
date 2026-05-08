@@ -8,7 +8,12 @@ from aiogram.types import CallbackQuery
 from app import db
 from app.bot.handlers.inventory import open_inventory_screen
 from app.bot.keyboards import kb_shop
-from app.shop import ensure_shop_today, shop_message_text
+from app.shop import (
+    effective_act_for_shop,
+    ensure_shop_today,
+    filter_shop_items_for_act,
+    shop_message_text,
+)
 
 router = Router()
 
@@ -26,15 +31,17 @@ async def nav_shop(cq: CallbackQuery) -> None:
         await cq.answer("Герой отдыхает. Магазин будет доступен после пробуждения.", show_alert=True)
         return
     day, items = await ensure_shop_today()
+    act = effective_act_for_shop(u)
+    items_for_act = filter_shop_items_for_act(items, act)
     if cq.message:
         await cq.message.edit_text(
             shop_message_text(
                 day,
-                items,
+                items_for_act,
                 gold=int(u["gold"]),
                 equipped=dict(u.get("equipped") or {}),
             ),
-            reply_markup=kb_shop(items),
+            reply_markup=kb_shop(items_for_act),
         )
     await cq.answer()
 
@@ -51,6 +58,12 @@ async def shop_buy(cq: CallbackQuery) -> None:
         await cq.answer("Неверный слот.", show_alert=True)
         return
     day, items = await ensure_shop_today()
+    act = effective_act_for_shop(u)
+    items_for_act = filter_shop_items_for_act(items, act)
+    visible_slots = {int(x["slot"]) for x in items_for_act}
+    if slot not in visible_slots:
+        await cq.answer("Этот товар недоступен в текущем акте.", show_alert=True)
+        return
     by_slot = {int(x["slot"]): x for x in items}
     offer = by_slot.get(slot)
     if not offer:
@@ -101,14 +114,16 @@ async def shop_buy(cq: CallbackQuery) -> None:
     day2, items2 = await ensure_shop_today()
     nu = await db.get_user(u["user_id"])
     if cq.message and nu:
+        act2 = effective_act_for_shop(nu)
+        items2_for_act = filter_shop_items_for_act(items2, act2)
         await cq.message.edit_text(
             shop_message_text(
                 day2,
-                items2,
+                items2_for_act,
                 gold=int(nu["gold"]),
                 equipped=dict(nu.get("equipped") or {}),
             ),
-            reply_markup=kb_shop(items2),
+            reply_markup=kb_shop(items2_for_act),
         )
 
 

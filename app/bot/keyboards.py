@@ -119,14 +119,19 @@ def kb_main(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def kb_debug() -> ReplyKeyboardMarkup:
+def kb_debug(*, rests: int = 0, fishings: int = 0, hours_total: int = 0) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(text="🩹 Лечение"),
+                KeyboardButton(text=f"😴 Отдых ({max(0, rests)})"),
+                KeyboardButton(text=f"🎣 Рыбалка ({max(0, fishings)})"),
+            ],
+            [KeyboardButton(text=f"🕒 Часы: {max(0, hours_total)}")],
+            [
                 KeyboardButton(text="💰 +100 золота"),
                 KeyboardButton(text="⭐ +100 опыта"),
-            ]
+                KeyboardButton(text="♻️ Сбросить"),
+            ],
         ],
         resize_keyboard=True,
     )

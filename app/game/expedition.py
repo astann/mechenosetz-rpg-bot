@@ -31,9 +31,9 @@ def now_ts() -> float:
 
 def expedition_event_interval_seconds(dungeon: Dungeon) -> tuple[int, int]:
     sec = dungeon.duration_seconds
-    lo = max(6, sec // 8)
-    hi = max(lo + 5, (sec * 2) // 10)
-    hi = min(hi, max(lo + 8, sec // 3))
+    lo = max(2, sec // 15)
+    hi = max(lo + 2, sec // 10)
+    hi = min(hi, max(lo + 3, sec // 6))
     return lo, hi
 
 
@@ -134,18 +134,15 @@ def process_event(
         dmg = int(max(1, raw - wa - df))
         hp = max(0, hp - dmg)
         expedition["encounters"] = int(expedition["encounters"]) + 1
-        bonus = ""
-        if wa or df:
-            bonus = f" (с учётом экипировки: −{wa} атаки, −{df} брони)"
         if boss_due:
             text = (
                 f"👑 Финальный босс: {monsters_txt}. "
-                f"Потеряно {dmg} HP.{bonus}\nТекущее HP: {hp}."
+                f"Потеряно {dmg} HP.\nТекущее HP: {hp}."
             )
         else:
             text = (
                 f"⚔️ Столкновение: {monsters_txt}. "
-                f"Потеряно {dmg} HP.{bonus}\nТекущее HP: {hp}."
+                f"Потеряно {dmg} HP.\nТекущее HP: {hp}."
             )
     else:
         noncombat = apply_noncombat_event(

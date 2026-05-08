@@ -5,6 +5,7 @@ from typing import Any
 
 from app import db
 from app.game import now_ts
+from app.game.shop_catalog import ARMOR_BY_ACT, ITEMS_BY_ACT, WEAPONS_BY_ACT
 
 
 def today_utc() -> str:
@@ -18,44 +19,21 @@ def _pick(rng: random.Random, pool: list[dict[str, Any]], n: int) -> list[dict[s
 
 
 def generate_shop_stock(*, day_key: str) -> list[dict[str, Any]]:
-    """9 позиций: 3 оружия, 3 брони, 3 предмета. Стабильно от дня UTC."""
+    """18 позиций: по 2 оружия/брони/предмета на каждый акт."""
     rng = random.Random(f"mechenosetz_shop_{day_key}")
-
-    weapons_pool = [
-        {"kind": "weapon", "name": "Кинжал теней", "price": 45, "attack": 1},
-        {"kind": "weapon", "name": "Короткий меч", "price": 70, "attack": 2},
-        {"kind": "weapon", "name": "Боевой топор", "price": 95, "attack": 2},
-        {"kind": "weapon", "name": "Копьё стража", "price": 110, "attack": 3},
-        {"kind": "weapon", "name": "Посох грома", "price": 130, "attack": 3},
-        {"kind": "weapon", "name": "Клинок заката", "price": 160, "attack": 4},
-    ]
-    armor_pool = [
-        {"kind": "armor", "name": "Кожаная куртка", "price": 50, "defense": 2},
-        {"kind": "armor", "name": "Кольчуга", "price": 85, "defense": 4},
-        {"kind": "armor", "name": "Латы наёмника", "price": 120, "defense": 6},
-        {"kind": "armor", "name": "Плащ из шкуры", "price": 65, "defense": 3},
-        {"kind": "armor", "name": "Латный нагрудник", "price": 140, "defense": 7},
-        {"kind": "armor", "name": "Мантия архивара", "price": 100, "defense": 5},
-    ]
-    item_pool = [
-        {"kind": "item", "name": "Мазь целителя", "price": 35, "effect": "heal", "value": 25},
-        {"kind": "item", "name": "Сильное зелье", "price": 55, "effect": "heal", "value": 45},
-        {"kind": "item", "name": "Сухпаёк", "price": 20, "effect": "heal", "value": 12},
-        {"kind": "item", "name": "Оберег удачи", "price": 40, "effect": "heal", "value": 18},
-        {"kind": "item", "name": "Эликсир бодрости", "price": 48, "effect": "heal", "value": 30},
-        {"kind": "item", "name": "Святая вода", "price": 32, "effect": "heal", "value": 22},
-    ]
-
-    w = _pick(rng, weapons_pool, 3)
-    a = _pick(rng, armor_pool, 3)
-    it = _pick(rng, item_pool, 3)
 
     slots: list[dict[str, Any]] = []
     idx = 0
-    for x in w + a + it:
-        row = {**x, "slot": idx}
-        idx += 1
-        slots.append(row)
+    for act in (1, 2, 3):
+        for x in _pick(rng, WEAPONS_BY_ACT[act], 2):
+            slots.append({**x, "act": act, "slot": idx})
+            idx += 1
+        for x in _pick(rng, ARMOR_BY_ACT[act], 2):
+            slots.append({**x, "act": act, "slot": idx})
+            idx += 1
+        for x in _pick(rng, ITEMS_BY_ACT[act], 2):
+            slots.append({**x, "act": act, "slot": idx})
+            idx += 1
     return slots
 
 
@@ -85,6 +63,26 @@ async def ensure_shop_today() -> tuple[str, list[dict[str, Any]]]:
         await db.set_shop_state(day_now, stock)
         return day_now, stock
     return day_now, items
+
+
+def effective_act_for_shop(u: dict[str, Any]) -> int:
+    selected = int(u.get("selected_act", 1) or 1)
+    max_open = (
+        4
+        if bool(u.get("fourth_act_unlocked"))
+        else 3
+        if bool(u.get("third_act_unlocked"))
+        else 2
+        if bool(u.get("next_act_unlocked"))
+        else 1
+    )
+    if selected < 1:
+        selected = 1
+    return min(selected, max_open)
+
+
+def filter_shop_items_for_act(items: list[dict[str, Any]], act: int) -> list[dict[str, Any]]:
+    return [x for x in items if int(x.get("act", 1)) == int(act)]
 
 
 def shop_message_text(
