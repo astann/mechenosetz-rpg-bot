@@ -18,13 +18,13 @@ class Monster:
 MONSTERS: tuple[Monster, ...] = (
     Monster("bone_rat", "Костяная Крыса", "🐀", 0.55),
     Monster("blood_bat", "Кровавый Нетопырь", "🦇", 0.65),
-    Monster("bone_guard", "Костяной Страж", "💀", 0.9),
-    Monster("ghoul", "Упырь", "🧟", 1.1),
+    Monster("bone_guard", "Костяной Страж", "💀", 3),
+    Monster("ghoul", "Упырь", "🧟", 2),
     Monster("shadow_wolf", "Сумрачный Волк", "🐺", 1.35),
-    Monster("cultist", "Культист", "🕯️", 1.55),
-    Monster("wraith", "Плачущий Призрак", "👻", 2.3),
-    Monster("shadow_spawn", "Порождение Тени", "🗿", 3.7),
-    Monster("sorcerer", "Колдун", "🔮", 7),
+    Monster("cultist", "Культист", "🕯️", 3),
+    Monster("wraith", "Плачущий Призрак", "👻", 6.3),
+    Monster("shadow_spawn", "Порождение Тени", "🗿", 8.7),
+    Monster("sorcerer", "Колдун", "🔮", 14),
     # Акт II
     Monster("corpse_hound", "Трупная Гончая", "🦴", 3.6),
     Monster("gloom_bandit", "Сумрачный Бандит", "🗡️", 4.1),
@@ -45,7 +45,7 @@ MONSTER_BY_ID: dict[str, Monster] = {m.id: m for m in MONSTERS}
 
 # Пулы монстров по подземельям.
 MONSTERS_BY_DUNGEON: dict[str, tuple[str, ...]] = {
-    "forest": ("bone_rat", "blood_bat", "shadow_wolf", "ghoul"),
+    "forest": ("bone_rat", "blood_bat", "shadow_wolf"),
     "crypt": ("bone_guard", "ghoul", "wraith", "cultist"),
     "lair": ("cultist", "wraith", "shadow_spawn"),
     "dead_suburb": ("ghoul", "wraith", "corpse_hound", "cultist", "slum_scavenger"),
@@ -93,7 +93,7 @@ def _pick_weighted(candidates: list[Monster], target: float) -> Monster:
 
 
 def sample_encounter(total_difficulty: float, dungeon_id: str | None = None) -> list[Monster]:
-    """Вернуть 1 монстра или группу с суммарной сложностью около бюджета."""
+    """Вернуть 1 монстра или группу без превышения бюджета сложности."""
     budget = max(0.9, float(total_difficulty))
     pool_ids = MONSTERS_BY_DUNGEON.get(dungeon_id or "")
     if pool_ids:
@@ -104,17 +104,17 @@ def sample_encounter(total_difficulty: float, dungeon_id: str | None = None) -> 
         pool = list(MONSTERS)
 
     group: list[Monster] = []
-    remaining = budget
+    used = 0.0
     max_size = 4
     for _ in range(max_size):
-        soft_cap = max(0.9, remaining + 0.6)
-        candidates = [m for m in pool if m.difficulty <= soft_cap]
+        remaining = budget - used
+        candidates = [m for m in pool if m.difficulty <= remaining + 1e-9]
         if not candidates:
             break
         chosen = _pick_weighted(candidates, target=max(0.9, remaining))
         group.append(chosen)
-        # Часть сложности «съедается», оставляя шанс на группу из мелочи.
-        remaining -= chosen.difficulty * random.uniform(0.65, 0.95)
+        used += chosen.difficulty
+        remaining = budget - used
         if remaining <= 0.25 and len(group) >= 2:
             break
 

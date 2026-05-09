@@ -8,7 +8,9 @@ from aiogram.types import CallbackQuery
 from app import db
 from app.bot.keyboards import kb_main
 from app.bot.texts import status_text
+from app.bot.ui_state import chapel_enabled, chapel_nav_title, order_enabled
 from app.game import now_ts
+from app.game.mercenary_order import effective_hp_max_for_user
 from app.game.hero_rest import new_rest_state
 
 router = Router()
@@ -26,7 +28,7 @@ async def rest_start(cq: CallbackQuery) -> None:
     if u.get("rest"):
         await cq.answer("Герой уже отдыхает.", show_alert=True)
         return
-    if int(u["hp_current"]) >= int(u["hp_max"]):
+    if int(u["hp_current"]) >= effective_hp_max_for_user(u):
         await cq.answer("HP уже полное — отдых не нужен.", show_alert=True)
         return
     rest = new_rest_state(now_ts=now_ts())
@@ -35,7 +37,14 @@ async def rest_start(cq: CallbackQuery) -> None:
     if cq.message and nu:
         await cq.message.edit_text(
             status_text(nu),
-            reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
+            reply_markup=kb_main(
+                nu.get("expedition"),
+                nu.get("rest"),
+                nu.get("fishing"),
+                chapel_enabled(nu),
+                order_enabled(nu),
+                chapel_title=chapel_nav_title(nu),
+            ),
         )
     await cq.answer("Герой лёг отдыхать.")
 
@@ -58,6 +67,13 @@ async def rest_wake(cq: CallbackQuery) -> None:
         await cq.bot.send_message(
             nu["user_id"],
             status_text(nu),
-            reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
+            reply_markup=kb_main(
+                nu.get("expedition"),
+                nu.get("rest"),
+                nu.get("fishing"),
+                chapel_enabled(nu),
+                order_enabled(nu),
+                chapel_title=chapel_nav_title(nu),
+            ),
         )
     await cq.answer()

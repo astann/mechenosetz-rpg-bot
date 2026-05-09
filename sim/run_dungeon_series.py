@@ -15,6 +15,7 @@ from typing import Any
 
 import app.game.expedition as exp_mod
 from app.game import create_expedition, finish_rewards, hp_max_for_level, process_event
+from app.game.expedition import scaled_equipment_stats
 from app.game.dungeons import DUNGEONS, Dungeon
 from app.game.monsters import final_boss_for_dungeon
 
@@ -54,11 +55,14 @@ def _simulate_one_run(
         prev_now = exp_mod.now_ts
         try:
             exp_mod.now_ts = lambda: sim_now  # type: ignore[assignment]
+            df_s, wm_s = scaled_equipment_stats(
+                max(0, defense_bonus), max(0, attack_bonus)
+            )
             expedition, _ = process_event(
                 expedition=expedition,
                 level=level,
-                defense_flat=max(0, defense_bonus),
-                weapon_attack=max(0, attack_bonus),
+                defense_flat=df_s,
+                weapon_attack=wm_s,
             )
         finally:
             exp_mod.now_ts = prev_now  # type: ignore[assignment]

@@ -92,7 +92,7 @@ def shop_message_text(
     gold: int | None = None,
     equipped: dict[str, Any] | None = None,
 ) -> str:
-    lines = [f"🏪 <b>Магазин</b> (витрина на {day} UTC)\n"]
+    lines = [f"🏪 <b>Торговец</b> (витрина на {day} UTC)\n"]
     if gold is not None:
         lines.append(f"💰 <b>Твоё золото:</b> {gold}")
     if equipped is not None:
@@ -111,3 +111,24 @@ def shop_message_text(
     if gold is not None or equipped is not None:
         lines.append("")
     return "\n".join(lines)
+
+
+def sell_price(item: dict[str, Any]) -> int:
+    kind = str(item.get("kind", ""))
+    rarity = str(item.get("rarity", "common"))
+    if "price" in item:
+        base = int(item.get("price", 0))
+    elif kind == "weapon":
+        base = int(item.get("attack", 0)) * 18
+    elif kind == "armor":
+        base = int(item.get("defense", 0)) * 18
+    elif kind == "item" and str(item.get("effect", "")) == "heal":
+        base = int(item.get("value", 0)) * 2
+    else:
+        base = 10
+    mult = 1.0
+    if rarity == "rare":
+        mult = 1.35
+    elif rarity == "epic":
+        mult = 1.8
+    return max(1, int(base * 0.5 * mult))

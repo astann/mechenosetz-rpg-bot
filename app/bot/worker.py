@@ -11,6 +11,7 @@ from aiogram import Bot
 from app import db
 from app.bot.keyboards import kb_main
 from app.bot.texts import status_text
+from app.bot.ui_state import chapel_enabled, chapel_nav_title, order_enabled
 from app.game import (
     dungeon_by_id,
     expedition_travel_flavor,
@@ -18,9 +19,18 @@ from app.game import (
     hp_max_for_level,
     now_ts,
     process_event,
+    scaled_equipment_stats,
     xp_for_next_level,
 )
 from app.game.monsters import final_boss_for_dungeon
+from app.game.chapel import active_bonuses
+from app.game.mercenary_order import (
+    aggregate_mercenary_stats,
+    effective_hp_max,
+    effective_hp_max_for_user,
+    sync_expedition_mercenary_snapshot,
+    try_mercenary_sacrifice,
+)
 from app.shop import equipment_bonuses
 
 _FLAVOR_GAP_SEC = 6.0
@@ -28,12 +38,18 @@ _FLAVOR_MIN_BEFORE_EVENT_SEC = 4.0
 _BLACK_WALL_BOSS_HP = 300
 
 
+def _apply_post_run_heal(hp_value: int, hp_cap: int, exp: dict) -> tuple[int, int]:
+    heal = max(0, int(exp.get("merc_heal_after_run", 0) or 0))
+    healed_hp = min(max(1, hp_cap), max(1, hp_value) + heal)
+    return healed_hp, heal
+
+
 async def process_rests(bot: Bot) -> None:
     now = now_ts()
     for u in await db.users_with_rest_finished(now):
         uid = int(u["user_id"])
-        hp_max = int(u["hp_max"])
-        await db.update_user(uid, hp_current=hp_max, clear_rest=True)
+        hp_full = effective_hp_max_for_user(u)
+        await db.update_user(uid, hp_current=hp_full, clear_rest=True)
         await bot.send_message(
             uid,
             "☀️ Герой выспался. HP полностью восстановлено.",
@@ -43,7 +59,14 @@ async def process_rests(bot: Bot) -> None:
             await bot.send_message(
                 uid,
                 status_text(nu),
-                reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
+                reply_markup=kb_main(
+                    nu.get("expedition"),
+                    nu.get("rest"),
+                    nu.get("fishing"),
+                    chapel_enabled(nu),
+                    order_enabled(nu),
+                    chapel_title=chapel_nav_title(nu),
+                ),
             )
 
 
@@ -72,7 +95,14 @@ async def process_fishing(bot: Bot) -> None:
             await bot.send_message(
                 uid,
                 status_text(nu),
-                reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
+                reply_markup=kb_main(
+                    nu.get("expedition"),
+                    nu.get("rest"),
+                    nu.get("fishing"),
+                    chapel_enabled(nu),
+                    order_enabled(nu),
+                    chapel_title=chapel_nav_title(nu),
+                ),
             )
 
 
@@ -95,8 +125,15 @@ async def process_expeditions(bot: Bot) -> None:
             and now >= float(exp["end_ts"])
         )
         if (now >= float(exp["next_event_ts"]) and now < float(exp["end_ts"])) or boss_pending_after_end:
-            df, wm = equipment_bonuses(u.get("equipped") or {})
+            df_eq, wm_eq = equipment_bonuses(u.get("equipped") or {})
+            df_eq, wm_eq = scaled_equipment_stats(df_eq, wm_eq)
+            chapel_atk, chapel_df, _ = active_bonuses(u.get("chapel"))
+            merc_a = int(exp.get("merc_attack", 0) or 0)
+            merc_d = int(exp.get("merc_defense", 0) or 0)
+            wm = wm_eq + merc_a + chapel_atk
+            df = df_eq + chapel_df + merc_d
             was_boss_done = bool(exp.get("boss_done"))
+            hp_before_fight = int(exp["hp"])
             exp, text = process_event(
                 expedition=exp,
                 level=int(u["level"]),
@@ -105,11 +142,46 @@ async def process_expeditions(bot: Bot) -> None:
             )
             exp["last_flavor_ts"] = now_ts()
             hp = int(exp["hp"])
-            await db.update_user(
-                u["user_id"],
-                hp_current=max(1, hp),
-                expedition=exp,
-            )
+            saved_by_merc = False
+            if hp <= 0:
+                roster = exp.get("mercenary_roster") or []
+                if roster:
+                    ok, dead_title = try_mercenary_sacrifice(roster)
+                    if ok:
+                        hp = min(
+                            hp_before_fight,
+                            effective_hp_max(int(u["hp_max"]), roster),
+                        )
+                        exp["hp"] = hp
+                        exp["mercenary_roster"] = roster
+                        sync_expedition_mercenary_snapshot(exp)
+                        text = text.replace(
+                            "Текущее HP: 0",
+                            f"Текущее HP: {hp}",
+                            1,
+                        )
+                        msg_tail = (
+                            "Твоё HP не изменилось."
+                            if hp == hp_before_fight
+                            else f"Макс. HP сократился вместе с отрядом — сейчас {hp} HP."
+                        )
+                        text += (
+                            f"\n\n💀 <b>{dead_title}</b> погиб вместо героя. "
+                            f"{msg_tail}"
+                        )
+                        saved_by_merc = True
+                        await db.update_user(
+                            u["user_id"],
+                            hp_current=hp,
+                            expedition=exp,
+                            mercenary=roster,
+                        )
+            if not saved_by_merc:
+                await db.update_user(
+                    u["user_id"],
+                    hp_current=max(1, hp),
+                    expedition=exp,
+                )
             await bot.send_message(
                 u["user_id"],
                 f"🕯 <b>{d.title}</b>\n{text}",
@@ -165,22 +237,37 @@ async def process_expeditions(bot: Bot) -> None:
                             except Exception:
                                 logging.exception("Failed to notify user %s about act 4", uid)
                         u["fourth_act_unlocked"] = True
-            if hp <= 0:
+            if hp <= 0 and not saved_by_merc:
+                hp_failed = max(1, min(int(u["hp_max"]), 1))
+                hp_cap_fail = effective_hp_max(int(u["hp_max"]), u.get("mercenaries"))
+                hp_after_fall, merc_heal = _apply_post_run_heal(hp_failed, hp_cap_fail, exp)
                 await db.update_user(
                     u["user_id"],
-                    hp_current=1,
+                    hp_current=hp_after_fall,
                     clear_expedition=True,
                 )
                 await bot.send_message(
                     u["user_id"],
                     "☠️ Герой пал в экспедиции и вернулся раненым. Добыча потеряна.",
                 )
+                if merc_heal > 0:
+                    await bot.send_message(
+                        u["user_id"],
+                        f"🩹 Наёмник успел перевязать раны: +{merc_heal} HP после забега.",
+                    )
                 nu = await db.get_user(u["user_id"])
                 if nu:
                     await bot.send_message(
                         nu["user_id"],
                         status_text(nu),
-                        reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
+                        reply_markup=kb_main(
+                            nu.get("expedition"),
+                            nu.get("rest"),
+                            nu.get("fishing"),
+                            chapel_enabled(nu),
+                            order_enabled(nu),
+                            chapel_title=chapel_nav_title(nu),
+                        ),
                     )
             continue
 
@@ -189,14 +276,18 @@ async def process_expeditions(bot: Bot) -> None:
             bonus_gold = int(exp.get("bonus_gold", 0))
             bonus_xp = int(exp.get("bonus_xp", 0))
             loot_boost = float(exp.get("loot_boost", 0.0))
+            merc_xp_bonus = int(exp.get("merc_xp_bonus", 0) or 0)
+            _, _, chapel_loot = active_bonuses(u.get("chapel"))
+            roster_fin = exp.get("mercenary_roster") or []
+            eff_reward_hp_max = effective_hp_max(int(u["hp_max"]), roster_fin)
             rewards = finish_rewards(
                 dungeon=d,
                 level=int(u["level"]),
                 hp=hp_left,
-                hp_max=int(u["hp_max"]),
-                loot_boost=loot_boost,
+                hp_max=eff_reward_hp_max,
+                loot_boost=loot_boost + chapel_loot,
             )
-            xp_gain = int(rewards["xp"]) + bonus_xp
+            xp_gain = int(rewards["xp"]) + bonus_xp + merc_xp_bonus
             gold_gain = int(rewards["gold"]) + bonus_gold
             xp = int(u["xp"]) + xp_gain
             level = int(u["level"])
@@ -205,7 +296,23 @@ async def process_expeditions(bot: Bot) -> None:
                 level += 1
             gold = int(u["gold"]) + gold_gain
             hp_max_new = hp_max_for_level(level)
-            hp_after = min(hp_max_new, hp_left)
+            roster_home = list(u.get("mercenaries") or [])
+            eff_cap_end = effective_hp_max(hp_max_new, roster_home)
+            hp_after, merc_heal = _apply_post_run_heal(hp_left, eff_cap_end, exp)
+            inv = list(u.get("inventory") or [])
+            loot = rewards.get("loot")
+            loot_text = "▫️ Трофей не найден."
+            loot_post_menu_text: str | None = None
+            if isinstance(loot, dict):
+                inv.append(dict(loot))
+                rarity = str(loot.get("rarity", "common"))
+                if rarity == "epic":
+                    loot_post_menu_text = f"✨ <b>ЭПИЧЕСКИЙ ТРОФЕЙ:</b> {loot.get('name', '?')}"
+                elif rarity == "rare":
+                    loot_post_menu_text = f"💎 <b>Редкий трофей:</b> {loot.get('name', '?')}"
+                else:
+                    loot_post_menu_text = f"🎁 <b>Найден трофей:</b> {loot.get('name', '?')}"
+                loot_text = "🎒 Трофей отправлен в инвентарь."
             await db.update_user(
                 u["user_id"],
                 level=level,
@@ -213,25 +320,39 @@ async def process_expeditions(bot: Bot) -> None:
                 gold=gold,
                 hp_max=hp_max_new,
                 hp_current=hp_after,
+                inventory=inv,
                 clear_expedition=True,
             )
-            loot_text = "Найден редкий трофей." if rewards["loot"] else "Редкого трофея нет."
             await bot.send_message(
                 u["user_id"],
                 (
                     f"🏁 Герой вернулся из <b>{d.title}</b>.\n"
                     f"+{xp_gain} опыта, +{gold_gain} золота.\n"
                     f"{loot_text}\n"
-                    f"HP сейчас: {hp_after}/{hp_max_new}."
+                    f"HP сейчас: {hp_after}/{eff_cap_end}."
                 ),
             )
+            if merc_heal > 0:
+                await bot.send_message(
+                    u["user_id"],
+                    f"🩹 После забега наёмник подлатал героя: +{merc_heal} HP.",
+                )
             nu = await db.get_user(u["user_id"])
             if nu:
                 await bot.send_message(
                     nu["user_id"],
                     status_text(nu),
-                    reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
+                    reply_markup=kb_main(
+                        nu.get("expedition"),
+                        nu.get("rest"),
+                        nu.get("fishing"),
+                        chapel_enabled(nu),
+                        order_enabled(nu),
+                        chapel_title=chapel_nav_title(nu),
+                    ),
                 )
+                if loot_post_menu_text:
+                    await bot.send_message(nu["user_id"], loot_post_menu_text)
             continue
 
         next_ev = float(exp["next_event_ts"])

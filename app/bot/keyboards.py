@@ -12,6 +12,7 @@ from aiogram.types import (
 )
 
 from app.game.dungeons import DUNGEONS
+from app.game.mercenary_order import MERCENARY_OFFERS, mercenary_effects_text
 
 
 def _dungeon_skulls(danger: float) -> str:
@@ -79,6 +80,10 @@ def kb_main(
     expedition: dict | None = None,
     rest: dict[str, Any] | None = None,
     fishing: dict[str, Any] | None = None,
+    chapel_enabled: bool = False,
+    order_enabled: bool = False,
+    *,
+    chapel_title: str = "Разрушенная Часовня",
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if expedition:
@@ -108,7 +113,15 @@ def kb_main(
         rows.append(
             [InlineKeyboardButton(text="Подземелья", callback_data="nav:dungeons")]
         )
-        rows.append([InlineKeyboardButton(text="Магазин", callback_data="nav:shop")])
+        rows.append([InlineKeyboardButton(text="Торговец", callback_data="nav:shop")])
+        if chapel_enabled:
+            rows.append(
+                [InlineKeyboardButton(text=chapel_title, callback_data="nav:chapel")]
+            )
+        if order_enabled:
+            rows.append(
+                [InlineKeyboardButton(text="Братство Меча", callback_data="nav:order")]
+            )
         rows.append([InlineKeyboardButton(text="Инвентарь", callback_data="nav:inv")])
         rows.append(
             [InlineKeyboardButton(text="Рыбалка (2 ч)", callback_data="fish:start")]
@@ -117,6 +130,47 @@ def kb_main(
             [InlineKeyboardButton(text="Отдых (6 ч)", callback_data="rest:start")]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_mercenary_order(*, has_roster: bool) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for o in MERCENARY_OFFERS:
+        oid = str(o["id"])
+        price = int(o["price"])
+        title = str(o["title"])
+        label = f"{title} ({mercenary_effects_text(o)}) · {price} 💰"
+        if len(label) > 64:
+            label = label[:61] + "…"
+        rows.append(
+            [InlineKeyboardButton(text=label, callback_data=f"order:h:{oid}")]
+        )
+    bottom: list[InlineKeyboardButton] = [
+        InlineKeyboardButton(text="Назад", callback_data="nav:main"),
+    ]
+    if has_roster:
+        bottom.insert(
+            0,
+            InlineKeyboardButton(text="Распустить отряд", callback_data="order:cancel"),
+        )
+    rows.append(bottom)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_chapel() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Благословение силы",
+                    callback_data="chapel:buy:strength",
+                )
+            ],
+            [InlineKeyboardButton(text="Дар исцеления", callback_data="chapel:buy:heal")],
+            [InlineKeyboardButton(text="Просьба о защите", callback_data="chapel:buy:defense")],
+            [InlineKeyboardButton(text="Благодать богатств", callback_data="chapel:buy:wealth")],
+            [InlineKeyboardButton(text="Назад", callback_data="nav:main")],
+        ]
+    )
 
 
 def kb_debug(*, rests: int = 0, fishings: int = 0, hours_total: int = 0) -> ReplyKeyboardMarkup:
@@ -153,10 +207,26 @@ def kb_shop(items: list[dict]) -> InlineKeyboardMarkup:
         )
     rows.append(
         [
+            InlineKeyboardButton(text="Продать", callback_data="shop:sell"),
             InlineKeyboardButton(text="Инвентарь", callback_data="shop:inv"),
             InlineKeyboardButton(text="Назад", callback_data="nav:main"),
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_sell_inventory(inv: list[dict]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for idx, it in enumerate(inv):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"Продать: {str(it.get('name', '?'))[:22]}",
+                    callback_data=f"shop:s:{idx}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="Назад к витрине", callback_data="shop:sell:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -170,6 +240,24 @@ def kb_inventory(inv: list[dict], *, inv_back: str = "shop") -> InlineKeyboardMa
                     InlineKeyboardButton(
                         text=f"Выпить: {it.get('name', '?')[:24]}",
                         callback_data=f"inv:u:{idx}:{inv_back}",
+                    )
+                ]
+            )
+        elif it.get("kind") == "weapon":
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"Надеть меч: {it.get('name', '?')[:20]}",
+                        callback_data=f"inv:e:{idx}:{inv_back}",
+                    )
+                ]
+            )
+        elif it.get("kind") == "armor":
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"Надеть броню: {it.get('name', '?')[:19]}",
+                        callback_data=f"inv:e:{idx}:{inv_back}",
                     )
                 ]
             )

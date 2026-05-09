@@ -10,12 +10,16 @@ from app import db
 from app.bot.name_filter import has_bad_words
 from app.bot.keyboards import kb_debug, kb_dungeons, kb_main
 from app.bot.texts import status_text
+from app.bot.ui_state import chapel_enabled, chapel_nav_title, order_enabled
 from app.game import hp_max_for_level, xp_for_next_level
+from app.game.mercenary_order import effective_hp_max, effective_hp_max_for_user
+from app.shop import generate_shop_stock, today_utc
 
 router = Router()
 _AWAITING_NAME: set[int] = set()
 _DBG_RESTS: dict[int, int] = {}
 _DBG_FISHINGS: dict[int, int] = {}
+_DBG_SHOP_CYCLES: dict[int, int] = {}
 _DBG_REST_HOURS = 6
 _DBG_FISHING_HOURS = 2
 
@@ -31,6 +35,22 @@ def _dbg_hours(rests: int, fishings: int) -> int:
 def _dbg_markup(user_id: int):
     rests, fishings = _dbg_counts(user_id)
     return kb_debug(rests=rests, fishings=fishings, hours_total=_dbg_hours(rests, fishings))
+
+
+async def _refresh_shop_debug(seed_key: str) -> None:
+    day = today_utc()
+    stock = generate_shop_stock(day_key=f"{day}#{seed_key}")
+    await db.set_shop_state(day, stock)
+
+
+async def _maybe_refresh_shop_by_hours(user_id: int) -> None:
+    rests, fishings = _dbg_counts(user_id)
+    hours = _dbg_hours(rests, fishings)
+    cycle = hours // 24
+    prev_cycle = int(_DBG_SHOP_CYCLES.get(user_id, 0))
+    if cycle > prev_cycle:
+        _DBG_SHOP_CYCLES[user_id] = cycle
+        await _refresh_shop_debug(f"dbg24h-u{user_id}-c{cycle}")
 
 
 def dungeons_title(act: int) -> str:
@@ -64,7 +84,14 @@ async def send_menu_screen(message: Message) -> None:
         return
     await message.answer(
         status_text(u),
-        reply_markup=kb_main(u.get("expedition"), u.get("rest"), u.get("fishing")),
+        reply_markup=kb_main(
+            u.get("expedition"),
+            u.get("rest"),
+            u.get("fishing"),
+            chapel_enabled(u),
+            order_enabled(u),
+            chapel_title=chapel_nav_title(u),
+        ),
     )
 
 
@@ -84,7 +111,14 @@ async def start(message: Message) -> None:
     )
     await message.answer(
         status_text(u),
-        reply_markup=kb_main(u.get("expedition"), u.get("rest"), u.get("fishing")),
+        reply_markup=kb_main(
+            u.get("expedition"),
+            u.get("rest"),
+            u.get("fishing"),
+            chapel_enabled(u),
+            order_enabled(u),
+            chapel_title=chapel_nav_title(u),
+        ),
     )
 
 
@@ -139,7 +173,14 @@ async def nav_main(cq: CallbackQuery) -> None:
     if cq.message:
         await cq.message.edit_text(
             status_text(u),
-            reply_markup=kb_main(u.get("expedition"), u.get("rest"), u.get("fishing")),
+            reply_markup=kb_main(
+                u.get("expedition"),
+                u.get("rest"),
+                u.get("fishing"),
+                chapel_enabled(u),
+                order_enabled(u),
+                chapel_title=chapel_nav_title(u),
+            ),
         )
     await cq.answer()
 
@@ -238,9 +279,10 @@ async def capture_player_name(message: Message) -> None:
 @router.message(F.text.startswith("😴 Отдых ("))
 async def dbg_rest(message: Message) -> None:
     u = await db.ensure_user(message.from_user.id, message.from_user.username)
-    hp_max = int(u["hp_max"])
-    await db.update_user(u["user_id"], hp_current=hp_max)
+    hp_full = effective_hp_max_for_user(u)
+    await db.update_user(u["user_id"], hp_current=hp_full)
     _DBG_RESTS[u["user_id"]] = int(_DBG_RESTS.get(u["user_id"], 0)) + 1
+    await _maybe_refresh_shop_by_hours(u["user_id"])
     await message.answer("Отдых завершён мгновенно. HP восстановлено.", reply_markup=_dbg_markup(u["user_id"]))
     await send_menu_screen(message)
 
@@ -264,6 +306,7 @@ async def dbg_fishing(message: Message) -> None:
         )
     await db.update_user(u["user_id"], inventory=inv)
     _DBG_FISHINGS[u["user_id"]] = int(_DBG_FISHINGS.get(u["user_id"], 0)) + 1
+    await _maybe_refresh_shop_by_hours(u["user_id"])
     await message.answer(
         f"Рыбалка завершена мгновенно. Поймано: {got}.",
         reply_markup=_dbg_markup(u["user_id"]),
@@ -288,7 +331,8 @@ async def dbg_xp(message: Message) -> None:
         xp -= xp_for_next_level(level)
         level += 1
     hp_max_new = hp_max_for_level(level)
-    hp_current_new = min(hp_max_new, int(u["hp_current"]))
+    eff_max = effective_hp_max(hp_max_new, u.get("mercenaries"))
+    hp_current_new = min(eff_max, int(u["hp_current"]))
     await db.update_user(
         u["user_id"],
         level=level,
@@ -313,6 +357,8 @@ async def dbg_reset(message: Message) -> None:
         clear_expedition=True,
         clear_rest=True,
         clear_fishing=True,
+        clear_chapel=True,
+        clear_mercenary=True,
         inventory=[],
         equipped={},
         next_act_unlocked=False,
@@ -323,6 +369,8 @@ async def dbg_reset(message: Message) -> None:
     )
     _DBG_RESTS[u["user_id"]] = 0
     _DBG_FISHINGS[u["user_id"]] = 0
+    _DBG_SHOP_CYCLES[u["user_id"]] = 0
+    await _refresh_shop_debug(f"reset-u{u['user_id']}")
     _AWAITING_NAME.discard(message.from_user.id)
     await message.answer("Прогресс героя сброшен. Введите новое имя.", reply_markup=_dbg_markup(u["user_id"]))
     await send_menu_screen(message)

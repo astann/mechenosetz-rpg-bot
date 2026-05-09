@@ -23,6 +23,7 @@ from app.game import (
     process_event,
     xp_for_next_level,
 )
+from app.game.expedition import scaled_equipment_stats
 from app.game.monsters import final_boss_for_dungeon
 from app.game.shop_catalog import ARMOR_BY_ACT, WEAPONS_BY_ACT
 
@@ -163,11 +164,14 @@ def _run_expedition(state: dict[str, Any], dungeon_id: str, sim_now: float) -> t
         prev_now = exp_mod.now_ts
         try:
             exp_mod.now_ts = lambda: sim_now  # type: ignore[assignment]
+            df_s, wm_s = scaled_equipment_stats(
+                int(state["armor_defense"]), int(state["weapon_attack"])
+            )
             expedition, _ = process_event(
                 expedition=expedition,
                 level=int(state["level"]),
-                defense_flat=int(state["armor_defense"]),
-                weapon_attack=int(state["weapon_attack"]),
+                defense_flat=df_s,
+                weapon_attack=wm_s,
             )
         finally:
             exp_mod.now_ts = prev_now  # type: ignore[assignment]

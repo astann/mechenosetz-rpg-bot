@@ -7,15 +7,30 @@ from aiogram.types import CallbackQuery
 
 from app import db
 from app.bot.handlers.inventory import open_inventory_screen
-from app.bot.keyboards import kb_shop
+from app.bot.keyboards import kb_sell_inventory, kb_shop
 from app.shop import (
     effective_act_for_shop,
     ensure_shop_today,
     filter_shop_items_for_act,
+    sell_price,
     shop_message_text,
 )
 
 router = Router()
+
+
+def _sell_screen_text(*, gold: int, inv: list[dict], sold_item: str | None = None, sold_price: int = 0) -> str:
+    lines = ["💱 <b>Продажа предметов</b>\n", f"💰 <b>Твоё золото:</b> {gold}"]
+    if sold_item:
+        lines.append(f"Продано: {sold_item} (+{sold_price} 💰)")
+    lines.append("")
+    if not inv:
+        lines.append("Рюкзак пуст. Продавать нечего.")
+        return "\n".join(lines)
+    lines.append("Выбери предмет для продажи:")
+    for it in inv:
+        lines.append(f"• {it.get('name', '?')} — {sell_price(it)} 💰")
+    return "\n".join(lines)
 
 
 @router.callback_query(F.data == "nav:shop")
@@ -139,3 +154,58 @@ async def shop_inventory_from_shop(cq: CallbackQuery) -> None:
         await cq.answer("Герой отдыхает.", show_alert=True)
         return
     await open_inventory_screen(cq, inv_back="shop")
+
+
+@router.callback_query(F.data == "shop:sell")
+async def shop_sell_screen(cq: CallbackQuery) -> None:
+    u = await db.ensure_user(cq.from_user.id, cq.from_user.username)
+    if u.get("rest"):
+        await cq.answer("Герой отдыхает.", show_alert=True)
+        return
+    inv = list(u.get("inventory") or [])
+    if cq.message:
+        await cq.message.edit_text(
+            _sell_screen_text(gold=int(u["gold"]), inv=inv),
+            reply_markup=kb_sell_inventory(inv),
+        )
+    await cq.answer()
+
+
+@router.callback_query(F.data == "shop:sell:back")
+async def shop_sell_back(cq: CallbackQuery) -> None:
+    await nav_shop(cq)
+
+
+@router.callback_query(F.data.startswith("shop:s:"))
+async def shop_sell_item(cq: CallbackQuery) -> None:
+    u = await db.ensure_user(cq.from_user.id, cq.from_user.username)
+    if u.get("rest"):
+        await cq.answer("Герой отдыхает.", show_alert=True)
+        return
+    try:
+        idx = int((cq.data or "").split(":")[2])
+    except (IndexError, ValueError):
+        await cq.answer("Неверный индекс.", show_alert=True)
+        return
+    inv = list(u.get("inventory") or [])
+    if idx < 0 or idx >= len(inv):
+        await cq.answer("Предмета нет.", show_alert=True)
+        return
+    it = dict(inv[idx])
+    gain = sell_price(it)
+    inv.pop(idx)
+    gold_new = int(u["gold"]) + gain
+    await db.update_user(u["user_id"], gold=gold_new, inventory=inv)
+    nu = await db.get_user(u["user_id"])
+    if cq.message and nu:
+        inv2 = list(nu.get("inventory") or [])
+        await cq.message.edit_text(
+            _sell_screen_text(
+                gold=int(nu["gold"]),
+                inv=inv2,
+                sold_item=str(it.get("name", "?")),
+                sold_price=gain,
+            ),
+            reply_markup=kb_sell_inventory(inv2),
+        )
+    await cq.answer("Предмет продан.")

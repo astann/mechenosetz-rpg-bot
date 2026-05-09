@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery
 from app import db
 from app.bot.keyboards import kb_fishing_stop_confirm, kb_main
 from app.bot.texts import status_text
+from app.bot.ui_state import chapel_enabled, chapel_nav_title, order_enabled
 from app.game import now_ts
 from app.game.hero_fishing import new_fishing_state
 
@@ -36,7 +37,14 @@ async def fishing_start(cq: CallbackQuery) -> None:
     if cq.message and nu:
         await cq.message.edit_text(
             status_text(nu),
-            reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
+            reply_markup=kb_main(
+                nu.get("expedition"),
+                nu.get("rest"),
+                nu.get("fishing"),
+                chapel_enabled(nu),
+                order_enabled(nu),
+                chapel_title=chapel_nav_title(nu),
+            ),
         )
     await cq.answer("Герой ушёл на рыбалку.")
 
@@ -67,7 +75,14 @@ async def fishing_stop_confirm(cq: CallbackQuery) -> None:
             if nu:
                 await cq.message.edit_text(
                     status_text(nu),
-                    reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
+                    reply_markup=kb_main(
+                        nu.get("expedition"),
+                        nu.get("rest"),
+                        nu.get("fishing"),
+                        chapel_enabled(nu),
+                        order_enabled(nu),
+                        chapel_title=chapel_nav_title(nu),
+                    ),
                 )
         return
     await db.update_user(u["user_id"], clear_fishing=True)
@@ -81,7 +96,14 @@ async def fishing_stop_confirm(cq: CallbackQuery) -> None:
         await cq.bot.send_message(
             nu["user_id"],
             status_text(nu),
-            reply_markup=kb_main(nu.get("expedition"), nu.get("rest"), nu.get("fishing")),
+            reply_markup=kb_main(
+                nu.get("expedition"),
+                nu.get("rest"),
+                nu.get("fishing"),
+                chapel_enabled(nu),
+                order_enabled(nu),
+                chapel_title=chapel_nav_title(nu),
+            ),
         )
     await cq.answer()
 

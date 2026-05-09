@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import copy
+
 from aiogram import Router
 from aiogram.types import CallbackQuery
 
 from app import db
 from app.bot.keyboards import kb_main
+from app.bot.ui_state import chapel_enabled, chapel_nav_title, order_enabled
 from app.game import (
     create_expedition,
     dungeon_by_id,
     expedition_travel_flavor,
     now_ts,
 )
+from app.game.mercenary_order import aggregate_mercenary_stats
 
 router = Router()
 
@@ -51,12 +55,30 @@ async def run_start(cq: CallbackQuery) -> None:
         await cq.answer("Этот акт пока закрыт.", show_alert=True)
         return
     expedition = create_expedition(d, hp=int(u["hp_current"]))
-    await db.update_user(u["user_id"], expedition=expedition)
+    roster = copy.deepcopy(u.get("mercenaries") or [])
+    if roster:
+        agg = aggregate_mercenary_stats(roster)
+        expedition["merc_attack"] = agg["attack"]
+        expedition["merc_defense"] = agg["defense"]
+        expedition["merc_heal_after_run"] = agg["heal_after_run"]
+        expedition["merc_xp_bonus"] = agg["xp_bonus_run"]
+        expedition["merc_hp_bonus"] = agg["hp_bonus"]
+        expedition["mercenary_roster"] = roster
+        await db.update_user(u["user_id"], expedition=expedition)
+    else:
+        await db.update_user(u["user_id"], expedition=expedition)
     if cq.message:
         await cq.message.edit_text(
             f"🚶 Герой отправился в <b>{d.title}</b>.\n"
             "Я буду присылать новости о столкновениях и решениях по ходу похода.",
-            reply_markup=kb_main(expedition, None, None),
+            reply_markup=kb_main(
+                expedition,
+                None,
+                None,
+                chapel_enabled(u),
+                order_enabled(u),
+                chapel_title=chapel_nav_title(u),
+            ),
         )
         await cq.message.answer(
             f"🚶 <b>{d.title}</b>\n{expedition_travel_flavor(d.id)}",

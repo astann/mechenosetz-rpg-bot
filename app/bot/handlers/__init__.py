@@ -4,12 +4,24 @@ from __future__ import annotations
 
 from aiogram import Router
 
-from app.bot.handlers import common, dungeons, fishing, flee, inventory, rest, shop
+from app.bot.handlers import (
+    chapel,
+    common,
+    dungeons,
+    fishing,
+    flee,
+    inventory,
+    mercenary_order,
+    rest,
+    shop,
+)
 
 router = Router()
 router.include_router(common.router)
 router.include_router(dungeons.router)
 router.include_router(shop.router)
+router.include_router(chapel.router)
+router.include_router(mercenary_order.router)
 router.include_router(inventory.router)
 router.include_router(flee.router)
 router.include_router(rest.router)

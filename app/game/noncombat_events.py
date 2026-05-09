@@ -5,6 +5,13 @@ from __future__ import annotations
 import random
 from typing import TypedDict
 
+from app.game.dungeons import dungeon_by_id
+
+
+def _dungeon_act(dungeon_id: str) -> int:
+    d = dungeon_by_id(str(dungeon_id))
+    return max(1, int(d.act)) if d else 1
+
 
 class NonCombatState(TypedDict):
     risk: float
@@ -28,9 +35,10 @@ def apply_noncombat_event(
     next_fight_bonus: float,
 ) -> NonCombatState:
     text: str
+    act_m = _dungeon_act(dungeon_id)
     roll = random.random()
     if roll < 0.35:
-        found = random.randint(10, 40)
+        found = random.randint(10, 40) * act_m
         bonus_gold += found
         text = f"💰 Найден тайник: +{found} золота."
     elif roll < 0.60:
@@ -67,7 +75,7 @@ def apply_noncombat_event(
         hp = min(hp + heal, hp_cap)
         text += f"\n⚫ Во мраке у вас открывается второе дыхание: +{heal} HP."
     elif dungeon_id == "dead_suburb" and local_roll < 0.18:
-        found = random.randint(18, 46)
+        found = random.randint(18, 46) * act_m
         bonus_gold += found
         text += f"\n🏚 В заброшенном доме найден схрон: +{found} золота."
     elif dungeon_id == "gloom_slums" and local_roll < 0.18:

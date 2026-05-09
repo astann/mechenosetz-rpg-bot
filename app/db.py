@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 import aiosqlite
@@ -61,6 +62,10 @@ async def init_db() -> None:
             await db.execute("ALTER TABLE users ADD COLUMN rest_json TEXT")
         if "fishing_json" not in cols:
             await db.execute("ALTER TABLE users ADD COLUMN fishing_json TEXT")
+        if "chapel_json" not in cols:
+            await db.execute("ALTER TABLE users ADD COLUMN chapel_json TEXT")
+        if "mercenary_json" not in cols:
+            await db.execute("ALTER TABLE users ADD COLUMN mercenary_json TEXT")
         if "next_act_unlocked" not in cols:
             await db.execute(
                 "ALTER TABLE users ADD COLUMN next_act_unlocked INTEGER NOT NULL DEFAULT 0"
@@ -160,6 +165,59 @@ def _parse_fishing(raw: str | None) -> dict[str, Any] | None:
     return {"end_ts": float(end_ts)}
 
 
+def _parse_one_mercenary_row(data: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    if "slot" in data and data["slot"] is not None:
+        out["slot"] = str(data["slot"])
+    if "id" in data and data["id"] is not None:
+        out["id"] = str(data["id"])
+    if "title" in data and data["title"] is not None:
+        out["title"] = str(data["title"])
+    if "attack" in data and data["attack"] is not None:
+        out["attack"] = int(data["attack"])
+    if "defense" in data and data["defense"] is not None:
+        out["defense"] = int(data["defense"])
+    if "price" in data and data["price"] is not None:
+        out["price"] = int(data["price"])
+    if "heal_after_run" in data and data["heal_after_run"] is not None:
+        out["heal_after_run"] = int(data["heal_after_run"])
+    if "xp_bonus_run" in data and data["xp_bonus_run"] is not None:
+        out["xp_bonus_run"] = int(data["xp_bonus_run"])
+    if "hp_bonus" in data and data["hp_bonus"] is not None:
+        out["hp_bonus"] = int(data["hp_bonus"])
+    if not out.get("slot"):
+        out["slot"] = str(uuid.uuid4())
+    return out
+
+
+def _parse_mercenary_roster(raw: str | None) -> list[dict[str, Any]]:
+    if not raw:
+        return []
+    data = json.loads(raw)
+    if isinstance(data, list):
+        return [_parse_one_mercenary_row(x) for x in data if isinstance(x, dict)]
+    if isinstance(data, dict):
+        one = _parse_one_mercenary_row(data)
+        return [one] if one else []
+    raise ValueError("mercenary_json must be a JSON array or object")
+
+
+def _parse_chapel(raw: str | None) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("chapel_json must be a JSON object")
+    out: dict[str, Any] = {}
+    if "strength" in data and data["strength"] is not None:
+        out["strength"] = bool(data["strength"])
+    if "defense" in data and data["defense"] is not None:
+        out["defense"] = bool(data["defense"])
+    if "loot" in data and data["loot"] is not None:
+        out["loot"] = bool(data["loot"])
+    return out
+
+
 def _parse_json_dict(raw: str | None) -> dict[str, Any]:
     if not raw:
         return {}
@@ -189,6 +247,12 @@ async def get_user(user_id: int) -> dict[str, Any] | None:
         fj = u.get("fishing_json")
         u["fishing"] = _parse_fishing(fj) if fj else None
         u.pop("fishing_json", None)
+        cj = u.get("chapel_json")
+        u["chapel"] = _parse_chapel(cj) if cj else None
+        u.pop("chapel_json", None)
+        mj = u.get("mercenary_json")
+        u["mercenaries"] = _parse_mercenary_roster(mj) if mj else []
+        u.pop("mercenary_json", None)
         u["next_act_unlocked"] = bool(int(u.get("next_act_unlocked", 0) or 0))
         u["third_act_unlocked"] = bool(int(u.get("third_act_unlocked", 0) or 0))
         u["fourth_act_unlocked"] = bool(int(u.get("fourth_act_unlocked", 0) or 0))
@@ -212,6 +276,10 @@ async def update_user(
     clear_rest: bool = False,
     fishing: dict[str, Any] | None = None,
     clear_fishing: bool = False,
+    chapel: dict[str, Any] | None = None,
+    clear_chapel: bool = False,
+    mercenary: list[dict[str, Any]] | dict[str, Any] | None = None,
+    clear_mercenary: bool = False,
     next_act_unlocked: bool | None = None,
     third_act_unlocked: bool | None = None,
     fourth_act_unlocked: bool | None = None,
@@ -256,6 +324,19 @@ async def update_user(
     elif fishing is not None:
         fields.append("fishing_json = ?")
         values.append(json.dumps(fishing, ensure_ascii=False))
+    if clear_chapel:
+        fields.append("chapel_json = NULL")
+    elif chapel is not None:
+        fields.append("chapel_json = ?")
+        values.append(json.dumps(chapel, ensure_ascii=False))
+    if clear_mercenary:
+        fields.append("mercenary_json = NULL")
+    elif mercenary is not None:
+        payload: list[dict[str, Any]] | dict[str, Any] = mercenary
+        if isinstance(mercenary, dict):
+            payload = [mercenary]
+        fields.append("mercenary_json = ?")
+        values.append(json.dumps(payload, ensure_ascii=False))
     if next_act_unlocked is not None:
         fields.append("next_act_unlocked = ?")
         values.append(1 if next_act_unlocked else 0)
@@ -302,6 +383,12 @@ async def users_with_active_expedition() -> list[dict[str, Any]]:
         fj = u.get("fishing_json")
         u["fishing"] = _parse_fishing(fj) if fj else None
         u.pop("fishing_json", None)
+        cj = u.get("chapel_json")
+        u["chapel"] = _parse_chapel(cj) if cj else None
+        u.pop("chapel_json", None)
+        mj = u.get("mercenary_json")
+        u["mercenaries"] = _parse_mercenary_roster(mj) if mj else []
+        u.pop("mercenary_json", None)
         u["next_act_unlocked"] = bool(int(u.get("next_act_unlocked", 0) or 0))
         u["third_act_unlocked"] = bool(int(u.get("third_act_unlocked", 0) or 0))
         u["fourth_act_unlocked"] = bool(int(u.get("fourth_act_unlocked", 0) or 0))
